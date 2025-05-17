@@ -1,4 +1,4 @@
-from db.models.models import Company
+from db.models.company import Company
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from db.database import get_db_session
