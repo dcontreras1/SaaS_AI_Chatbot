@@ -1,6 +1,6 @@
 from fastapi import Header, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from db.models.models import Company
+from db.models.company import Company
 from db.database import get_db_session
 from sqlalchemy.future import select
 

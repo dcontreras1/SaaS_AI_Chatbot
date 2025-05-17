@@ -4,7 +4,7 @@ import os
 # Cargar credenciales de Twilio desde variables de entorno
 account_sid = os.getenv("TWILIO_ACCOUNT_SID")
 auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-twilio_whatsapp_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+twilio_whatsapp_number = os.getenv("TWILIO_PHONE_NUMBER")
 
 if not all([account_sid, auth_token, twilio_whatsapp_number]):
     raise EnvironmentError("Faltan variables de entorno de Twilio.")

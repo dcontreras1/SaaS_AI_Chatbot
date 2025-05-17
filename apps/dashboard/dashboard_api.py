@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from db.database import get_db_session
-from db.models.models import Company
+from db.models.company import Company
 from apps.auth.auth import get_current_company
 import secrets
 
