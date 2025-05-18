@@ -11,7 +11,7 @@ router = APIRouter()
 @router.post("/register")
 async def register_company(
     name: str,
-    whatsapp_phone_number_id: str,
+    company_number: str,
     whatsapp_token: str,
     industry: str = "",
     catalog_url: str = "",
@@ -19,7 +19,7 @@ async def register_company(
     db: AsyncSession = Depends(get_db_session)
 ):
     # Evitar duplicados
-    result = await db.execute(select(Company).where(Company.whatsapp_phone_number_id == whatsapp_phone_number_id))
+    result = await db.execute(select(Company).where(Company.company_number == company_number))
     if result.scalar():
         return {"error": "Ya existe una empresa con ese número de WhatsApp"}
 
@@ -27,7 +27,7 @@ async def register_company(
 
     company = Company(
         name=name,
-        whatsapp_phone_number_id=whatsapp_phone_number_id,
+        company_number=company_number,
         whatsapp_token=whatsapp_token,
         industry=industry,
         catalog_url=catalog_url,
@@ -46,5 +46,5 @@ async def get_company_profile(company: Company = Depends(get_current_company)):
         "industry": company.industry,
         "catalog_url": company.catalog_url,
         "schedule": company.schedule,
-        "whatsapp_phone_number_id": company.whatsapp_phone_number_id
+        "company_number": company.company_number
     }

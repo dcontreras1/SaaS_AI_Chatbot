@@ -8,9 +8,11 @@ from apps.ai.nlp_utils import detect_intent, extract_contact_info
 from sqlalchemy.future import select
 
 async def handle_incoming_message(message_data, db_session=None):
-    user_number = message_data["from"]
-    message_text = message_data["body"]
-    phone_id = message_data["phone_id"]
+    user_number = message_data["From"].replace("whatsapp:", "")
+    company_number = message_data["To"].replace("whatsapp:", "")
+    message_text = message_data["Body"]
+    
+    print(f"Datos del webhook: From={user_number}, To={company_number}, Body={message_text}")
 
     if db_session is None:
         async for session in get_db_session():
