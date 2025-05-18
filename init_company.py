@@ -14,7 +14,7 @@ async def create_test_company():
     async for session in get_db_session():
         # Verifica si ya existe
         result = await session.execute(
-            select(Company).where(Company.whatsapp_phone_number_id == os.getenv("TWILIO_PHONE_NUMBER"))
+            select(Company).where(Company.company_number == os.getenv("TWILIO_PHONE_NUMBER"))
         )
         existing = result.scalars().first()
 
@@ -27,7 +27,7 @@ async def create_test_company():
             industry="Servicios",
             catalog_url=None,
             schedule="Lunes a Viernes, 9am a 6pm",
-            whatsapp_phone_number_id=os.getenv("TWILIO_PHONE_NUMBER"),
+            company_number=os.getenv("TWILIO_PHONE_NUMBER"),
             whatsapp_token=os.getenv("TWILIO_AUTH_TOKEN"),
             api_key="test-api-key-123"
         )
