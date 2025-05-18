@@ -10,7 +10,7 @@ class Company(Base):
     industry = Column(String, nullable=True)
     catalog_url = Column(String, nullable=True)
     schedule = Column(String, nullable=True)
-    whatsapp_phone_number_id = Column(String, nullable=False, unique=True)
+    company_number = Column(String, nullable=False, unique=True)
     whatsapp_token = Column(String, nullable=False)
     api_key = Column(String, nullable=False, unique=True)
 
