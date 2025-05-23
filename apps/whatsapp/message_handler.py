@@ -1,5 +1,6 @@
 from apps.whatsapp.whatsapp_api import send_whatsapp_message
-# Ya no es necesario importar get_db_session aquí, se inyecta
+# Importa get_db_session aquí TEMPORALMENTE para esta prueba
+from db.database import get_db_session 
 from db.models.unknown_clients import UnknownClient
 from db.models.messages import Message
 from db.models.client import Client
@@ -8,30 +9,28 @@ from apps.ai.nlp_utils import detect_intent, extract_contact_info
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession # Asegúrate de que esto esté importado
 import logging
-import traceback # Asegúrate de que esto esté importado
-from datetime import datetime # Para el manejo de fechas en Appointment
+import traceback
+from datetime import datetime
 
-# --- Configura el logger para este módulo si no está configurado globalmente ---
 logger = logging.getLogger(__name__)
-# -----------------------------------------------------------------------------
 
-# ¡CORRECCIÓN CLAVE AQUÍ!
-# Elimina 'db_session=None' y asegúrate de que esté tipado correctamente.
-async def handle_incoming_message(message_data: dict, db_session: AsyncSession):
+# NOTA: La firma de la función cambia temporalmente para esta prueba
+async def handle_incoming_message(message_data: dict): # ¡Quitamos db_session del parámetro!
     """
     Maneja un mensaje entrante de WhatsApp.
-    
-    Args:
-        message_data (dict): Datos del mensaje con las claves:
-            - From: número del remitente (con prefijo whatsapp:)
-            - To: número de destino (con prefijo whatsapp:)
-            - Body: contenido del mensaje
-        db_session (AsyncSession): La sesión de base de datos inyectada por FastAPI.
     """
-    try:
-        # --- LÍNEA DE DEPURACIÓN CRÍTICA ---
-        logger.info(f"DEBUG HANDLER: Sesión RECIBIDA en handle_incoming_message (ID: {id(db_session)}, Tipo: {type(db_session)})")
-        # -----------------------------------
+    # QUITAMOS EL TRY/EXCEPT EXTERNO PARA VER EL STACK COMPLETO DEL ERROR
+    # try:
+    
+    # --- LÍNEA DE DEPURACIÓN CRÍTICA ---
+    logger.info(f"DEBUG HANDLER: Iniciando handle_incoming_message sin sesión inyectada para prueba.")
+    # -----------------------------------
+
+    # --- NUEVO BLOQUE: MANEJO MANUAL DE LA SESIÓN ---
+    # Esto simula lo que DEBERÍA hacer FastAPI.Depends internamente
+    async with get_db_session() as db_session: # <-- Aquí obtenemos la sesión manualmente
+        logger.info(f"DEBUG HANDLER: Sesión OBTENIDA MANUALMENTE (ID: {id(db_session)}, Tipo: {type(db_session)})")
+        # --- EL RESTO DE TU LÓGICA VA AQUÍ, INDENTADO DENTRO DE ESTE 'async with' ---
 
         # Extraer y limpiar números
         user_number = message_data["From"].replace("whatsapp:", "")
@@ -40,21 +39,14 @@ async def handle_incoming_message(message_data: dict, db_session: AsyncSession):
         
         logger.info(f"Procesando mensaje - De: {user_number}, Para: {company_number}, Mensaje: {message_text}")
 
-        # ¡ELIMINADO! Este bloque ya no es necesario ni correcto.
-        # La sesión db_session siempre será una AsyncSession inyectada por FastAPI.
-        # if db_session is None:
-        #     async for session in get_db_session():
-        #         db_session = session
-        #         break
-
         # Guardar mensaje
         new_message = Message(
             content=message_text,
             direction="in",
             sender=user_number,
-            company_id=1  # Reemplazar con lógica real para múltiples empresas
+            company_id=1
         )
-        db_session.add(new_message) # ¡Esta es la línea que falla!
+        db_session.add(new_message) # Esta línea ahora debería funcionar si el problema es Depends
 
         # Verificar si el usuario ya es cliente registrado
         result = await db_session.execute(select(Client).where(Client.phone_number == user_number))
@@ -91,13 +83,10 @@ async def handle_incoming_message(message_data: dict, db_session: AsyncSession):
         elif intent == "provide_contact":
             name = entities.get("name")
             phone = entities.get("phone") or user_number
-            appointment_datetime_str = entities.get("datetime") # Obtener como string
+            appointment_datetime_str = entities.get("datetime") 
 
             if name and appointment_datetime_str:
-                # Convertir la fecha y hora a un objeto datetime si es necesario para el modelo
                 try:
-                    # Asume que datetime_str está en un formato que puede ser parseado
-                    # Puedes ajustar el formato ('%Y-%m-%d %H:%M') según lo que devuelva tu NLP
                     appointment_datetime = datetime.strptime(appointment_datetime_str, '%Y-%m-%d %H:%M')
                 except ValueError:
                     logger.error(f"Formato de fecha/hora incorrecto: {appointment_datetime_str}")
@@ -105,20 +94,18 @@ async def handle_incoming_message(message_data: dict, db_session: AsyncSession):
                     await send_whatsapp_message(user_number, response)
                     return {"success": False, "error": "Formato de fecha/hora incorrecto"}
 
-                # Crear cliente si no existe
                 result = await db_session.execute(select(Client).where(Client.phone_number == phone))
                 client = result.scalars().first()
                 if not client:
                     client = Client(name=name, phone_number=phone)
                     db_session.add(client)
-                    await db_session.flush() # Importante para obtener client.id antes del commit
+                    await db_session.flush()
                     logger.info(f"Nuevo cliente registrado: {name} ({phone})")
 
-                # Crear la cita
                 appointment = Appointment(
                     client_id=client.id,
                     company_id=1,
-                    scheduled_for=appointment_datetime # Pasa el objeto datetime
+                    scheduled_for=appointment_datetime
                 )
                 db_session.add(appointment)
                 logger.info(f"Cita agendada para {name} en {appointment_datetime}")
@@ -139,7 +126,8 @@ async def handle_incoming_message(message_data: dict, db_session: AsyncSession):
         await db_session.commit()
         return {"success": True}
 
-    except Exception as e:
-        logger.error(f"Error procesando mensaje: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"success": False, "error": str(e)}
+    # FIN DEL BLOQUE DE 'async with'
+    # except Exception as e: # Quitamos el try/except externo para ver el stack completo
+    #    logger.error(f"Error procesando mensaje: {str(e)}")
+    #    logger.error(f"Traceback: {traceback.format_exc()}")
+    #    return {"success": False, "error": str(e)}
