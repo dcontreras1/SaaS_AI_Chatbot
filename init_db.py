@@ -7,7 +7,7 @@ load_dotenv()
 
 from db.database import engine
 from db.models.company import Base
-from db.models import appointment, client, messages, sessions, unknown_clients
+from db.models import appointment, chat_session, client, messages, unknown_client
 
 async def init_models():
     async with engine.begin() as conn:
@@ -21,4 +21,3 @@ async def init_models():
 
 if __name__ == "__main__":
     asyncio.run(init_models())
-
