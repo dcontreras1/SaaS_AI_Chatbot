@@ -1,133 +1,118 @@
-from apps.whatsapp.whatsapp_api import send_whatsapp_message
-# Importa get_db_session aquí TEMPORALMENTE para esta prueba
-from db.database import get_db_session 
-from db.models.unknown_clients import UnknownClient
-from db.models.messages import Message
-from db.models.client import Client
-from db.models.appointment import Appointment
-from apps.ai.nlp_utils import detect_intent, extract_contact_info
-from sqlalchemy.future import select
-from sqlalchemy.ext.asyncio import AsyncSession # Asegúrate de que esto esté importado
+import os
 import logging
-import traceback
-from datetime import datetime
+from datetime import datetime, timezone
+from sqlalchemy.future import select
+from sqlalchemy.exc import NoResultFound, MultipleResultsFound
+from typing import Optional
+
+from db.database import get_db_session
+from db.models.client import Client
+from db.models.unknown_client import UnknownClient
+from db.models.messages import Message
+from apps.whatsapp.whatsapp_api import send_whatsapp_message
+from apps.ai.openai_client import get_api_response
+from apps.ai.nlp_utils import extract_contact_info, detect_intent
+from apps.ai.predict_next_steps import predict_next_steps
+from apps.calendar.calendar_integration import create_calendar_event
 
 logger = logging.getLogger(__name__)
 
-# NOTA: La firma de la función cambia temporalmente para esta prueba
-async def handle_incoming_message(message_data: dict): # ¡Quitamos db_session del parámetro!
+async def handle_incoming_message(message_data: dict):
     """
-    Maneja un mensaje entrante de WhatsApp.
+    Maneja los mensajes entrantes de WhatsApp, interactúa con la IA,
+    guarda el historial de mensajes y coordina acciones.
     """
-    # QUITAMOS EL TRY/EXCEPT EXTERNO PARA VER EL STACK COMPLETO DEL ERROR
-    # try:
-    
-    # --- LÍNEA DE DEPURACIÓN CRÍTICA ---
-    logger.info(f"DEBUG HANDLER: Iniciando handle_incoming_message sin sesión inyectada para prueba.")
-    # -----------------------------------
+    user_number = message_data.get("From", "").replace("whatsapp:", "")
+    bot_number = message_data.get("To", "").replace("whatsapp:", "")
+    message_text = message_data.get("Body", "")
 
-    # --- NUEVO BLOQUE: MANEJO MANUAL DE LA SESIÓN ---
-    # Esto simula lo que DEBERÍA hacer FastAPI.Depends internamente
-    async with get_db_session() as db_session: # <-- Aquí obtenemos la sesión manualmente
+    logger.info("DEBUG HANDLER: Iniciando handle_incoming_message sin sesión inyectada para prueba.")
+
+    async with get_db_session() as db_session:
         logger.info(f"DEBUG HANDLER: Sesión OBTENIDA MANUALMENTE (ID: {id(db_session)}, Tipo: {type(db_session)})")
-        # --- EL RESTO DE TU LÓGICA VA AQUÍ, INDENTADO DENTRO DE ESTE 'async with' ---
+        logger.info(f"Procesando mensaje - De: {user_number}, Para: {bot_number}, Mensaje: {message_text}")
 
-        # Extraer y limpiar números
-        user_number = message_data["From"].replace("whatsapp:", "")
-        company_number = message_data["To"].replace("whatsapp:", "")
-        message_text = message_data["Body"]
-        
-        logger.info(f"Procesando mensaje - De: {user_number}, Para: {company_number}, Mensaje: {message_text}")
-
-        # Guardar mensaje
+        # Guardar el mensaje entrante en la base de datos
         new_message = Message(
             content=message_text,
+            timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
             direction="in",
             sender=user_number,
-            company_id=1
+            company_id=1 # Asumiendo un company_id fijo por ahora
         )
-        db_session.add(new_message) # Esta línea ahora debería funcionar si el problema es Depends
+        db_session.add(new_message)
 
-        # Verificar si el usuario ya es cliente registrado
-        result = await db_session.execute(select(Client).where(Client.phone_number == user_number))
-        client = result.scalars().first()
+        # Buscar cliente existente o registrar como desconocido
+        client: Optional[Client] = None
+        try:
+            result = await db_session.execute(select(Client).where(Client.phone_number == user_number))
+            client = result.scalar_one_or_none()
+        except MultipleResultsFound:
+            logger.warning(f"Se encontraron múltiples clientes para el número {user_number}. Usando el primero.")
+            result = await db_session.execute(select(Client).where(Client.phone_number == user_number))
+            client = result.scalars().first()
 
-        # Si no está registrado, guardarlo como cliente desconocido
         if not client:
-            unknown_result = await db_session.execute(
-                select(UnknownClient).where(UnknownClient.phone_number == user_number)
-            )
-            if not unknown_result.scalars().first():
-                db_session.add(UnknownClient(phone_number=user_number))
-                logger.info(f"Nuevo cliente desconocido registrado: {user_number}")
+            try:
+                result = await db_session.execute(select(UnknownClient).where(UnknownClient.phone_number == user_number))
+                unknown_client = result.scalar_one_or_none()
+                if not unknown_client:
+                    new_unknown_client = UnknownClient(phone_number=user_number, first_seen=datetime.now(timezone.utc).replace(tzinfo=None))
+                    db_session.add(new_unknown_client)
+                    logger.info(f"Nuevo cliente desconocido registrado: {user_number}")
+                else:
+                    logger.info(f"Cliente desconocido existente: {user_number}")
+            except Exception as e:
+                logger.error(f"Error al manejar cliente desconocido: {e}")
 
-        # Determinar intención
-        intent = detect_intent(message_text)
-        entities = extract_contact_info(message_text)
-        
+        # Detección de intención
+        intent = await detect_intent(message_text)
         logger.info(f"Intención detectada: {intent}")
-        if entities:
-            logger.info(f"Entidades extraídas: {entities}")
 
-        # Procesar según la intención
-        if intent == "ask_general":
-            response = "Claro, nuestros horarios son de lunes a viernes de 9am a 6pm."
-            await send_whatsapp_message(user_number, response)
-            logger.info(f"Respuesta enviada a {user_number}: {response}")
+        # Extracción de entidades (ej. para programación de citas)
+        entities = await extract_contact_info(message_text)
+        logger.info(f"Entidades extraídas: {entities}")
 
-        elif intent == "schedule_appointment":
-            response = "Perfecto, para agendar una cita necesito tu nombre completo, número de teléfono, día y hora de preferencia."
-            await send_whatsapp_message(user_number, response)
-            logger.info(f"Solicitud de información de cita enviada a {user_number}")
+        response_text = ""
 
-        elif intent == "provide_contact":
-            name = entities.get("name")
-            phone = entities.get("phone") or user_number
-            appointment_datetime_str = entities.get("datetime") 
+        if intent == "schedule_appointment":
+            # Lógica para programar cita
+            try:
+                appointment_datetime_str = entities.get('datetime')
+                if appointment_datetime_str:
+                    appointment_datetime = datetime.fromisoformat(appointment_datetime_str.replace('Z', '+00:00'))
+                    appointment_datetime = appointment_datetime.replace(tzinfo=None)
 
-            if name and appointment_datetime_str:
-                try:
-                    appointment_datetime = datetime.strptime(appointment_datetime_str, '%Y-%m-%d %H:%M')
-                except ValueError:
-                    logger.error(f"Formato de fecha/hora incorrecto: {appointment_datetime_str}")
-                    response = "No pude entender la fecha y hora. Por favor, asegúrate de usar un formato claro (ej. 'mañana a las 3pm')."
-                    await send_whatsapp_message(user_number, response)
-                    return {"success": False, "error": "Formato de fecha/hora incorrecto"}
-
-                result = await db_session.execute(select(Client).where(Client.phone_number == phone))
-                client = result.scalars().first()
-                if not client:
-                    client = Client(name=name, phone_number=phone)
-                    db_session.add(client)
-                    await db_session.flush()
-                    logger.info(f"Nuevo cliente registrado: {name} ({phone})")
-
-                appointment = Appointment(
-                    client_id=client.id,
-                    company_id=1,
-                    scheduled_for=appointment_datetime
-                )
-                db_session.add(appointment)
-                logger.info(f"Cita agendada para {name} en {appointment_datetime}")
-
-                response = f"Gracias {name}, tu cita ha sido registrada para el {appointment_datetime.strftime('%A %d de %B a las %H:%M')}"
-                await send_whatsapp_message(user_number, response)
-                logger.info(f"Confirmación de cita enviada a {user_number}")
-            else:
-                response = "Falta información para agendar la cita. Por favor incluye tu nombre, número, día y hora."
-                await send_whatsapp_message(user_number, response)
-                logger.info(f"Solicitud de información adicional enviada a {user_number}")
-
+                    event_summary = f"Cita con {entities.get('name', user_number)}"
+                    event_description = f"Contacto: {entities.get('phone', user_number)}. Mensaje original: {message_text}"
+                    calendar_event_link = await create_calendar_event(
+                        summary=event_summary,
+                        description=event_description,
+                        start_datetime=appointment_datetime,
+                        end_datetime=appointment_datetime
+                    )
+                    response_text = f"¡Perfecto! Hemos programado tu cita para el {appointment_datetime.strftime('%d/%m/%Y a las %H:%M')}. Aquí tienes el enlace al evento: {calendar_event_link}"
+                else:
+                    response_text = "Necesito más información para programar tu cita, como la fecha y hora. ¿Podrías proporcionármelas?"
+            except Exception as e:
+                logger.error(f"Error al programar cita: {e}")
+                response_text = "Lo siento, hubo un error al intentar programar la cita. Por favor, inténtalo de nuevo más tarde."
+        elif intent == "ask_general":
+            response_text = await get_api_response(message_text)
+        elif intent == "fallback":
+            response_text = await get_api_response(message_text)
         else:
-            response = "Lo siento, no entendí tu mensaje. ¿Podrías reformularlo?"
-            await send_whatsapp_message(user_number, response)
-            logger.info(f"Mensaje de no entendido enviado a {user_number}")
+            response_text = await get_api_response(message_text)
 
+        # Enviar la respuesta de vuelta al usuario
+        if not isinstance(response_text, str):
+            logger.error(f"La respuesta generada no es una cadena de texto: {type(response_text)} - {response_text}")
+            response_text = "Lo siento, ha ocurrido un error al generar mi respuesta."
+
+        await send_whatsapp_message(user_number, response_text)
+
+        # Confirmar los cambios en la base de datos
         await db_session.commit()
-        return {"success": True}
+        logger.info("Cambios en la base de datos confirmados.")
 
-    # FIN DEL BLOQUE DE 'async with'
-    # except Exception as e: # Quitamos el try/except externo para ver el stack completo
-    #    logger.error(f"Error procesando mensaje: {str(e)}")
-    #    logger.error(f"Traceback: {traceback.format_exc()}")
-    #    return {"success": False, "error": str(e)}
+    return {"status": "success", "message": "Mensaje procesado"}
