@@ -8,8 +8,9 @@ class Message(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     content = Column(String, nullable=False)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    direction = Column(String, nullable=False)  # "in" o "out"
+    # Convierte el datetime de UTC-aware a UTC-naive para compatibilidad con TIMESTAMP WITHOUT TIME ZONE
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
+    direction = Column(String, nullable=False)
     sender = Column(String, nullable=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 

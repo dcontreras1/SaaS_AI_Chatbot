@@ -17,4 +17,4 @@ class Company(Base):
     appointments = relationship("Appointment", back_populates="company", cascade="all, delete")
     clients = relationship("Client", back_populates="company")
     messages = relationship("Message", back_populates="company")
-    sessions = relationship("Session", back_populates="company")
+    sessions = relationship("ChatSession", back_populates="company")

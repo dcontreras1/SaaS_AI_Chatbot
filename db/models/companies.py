@@ -9,5 +9,5 @@ async def get_company_by_number(phone_number_id: str, db: AsyncSession = None):
             db = session
             break
 
-    result = await db.execute(select(Company).where(Company.whatsapp_phone_number_id == phone_number_id))
+    result = await db.execute(select(Company).where(Company.company_number == phone_number_id))
     return result.scalars().first()

@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from db.models.base import Base
 
-class Session(Base):
+class ChatSession(Base):
     __tablename__ = "sessions"
 
     id = Column(Integer, primary_key=True, index=True)
