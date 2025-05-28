@@ -10,21 +10,4 @@ services:
       - .:/app
     env_file:
       - .env
-    depends_on:
-      - db
-
-  db:
-    image: postgres:15
-    container_name: whatsapp_ia_db
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: Contreras2007
-      POSTGRES_DB: whatsapp_saas
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-volumes:
-  pgdata:
+    # Ya no se necesita depends_on si el servicio 'db' ha sido eliminado
