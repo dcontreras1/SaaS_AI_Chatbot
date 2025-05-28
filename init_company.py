@@ -8,10 +8,10 @@ from db.models.company import Company
 from db.models.client import Client
 from db.models.appointment import Appointment
 
-load_dotenv()  # Cargar .env
+load_dotenv()
 
 async def create_test_company():
-    async for session in get_db_session():
+    async with get_db_session() as session:
         # Verifica si ya existe
         result = await session.execute(
             select(Company).where(Company.company_number == os.getenv("TWILIO_PHONE_NUMBER"))
