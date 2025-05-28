@@ -1,10 +1,11 @@
 import os
 import logging
-from fastapi import APIRouter, Form, BackgroundTasks
+from fastapi import APIRouter, Form
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 
 from apps.whatsapp.message_handler import handle_incoming_message
+from twilio.twiml.messaging_response import MessagingResponse
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -26,15 +27,15 @@ async def twilio_webhook(
 
         logger.info(f"Datos del webhook: From={From}, To={To}, Body={Body}")
 
-        # Ejecutamos handle_incoming_message en segundo plano.
-        # No necesitamos pasarle la sesión aquí, ya que la manejará internamente.
-        # BackgroundTasks es una forma de que FastAPI responda rápido a Twilio
-        # mientras el procesamiento pesado ocurre "detrás de escenas".
-        background_tasks = BackgroundTasks() # Debemos instanciar BackgroundTasks aquí si no la recibimos como parámetro
-        background_tasks.add_task(handle_incoming_message, message_data)
+        # Llama a handle_incoming_message y espera la respuesta TwilioML
+        twilio_response_xml = await handle_incoming_message(message_data)
 
-        # Retornamos un "OK" inmediatamente para Twilio.
-        return "OK"
+        # Retorna el TwilioML como PlainTextResponse
+        return PlainTextResponse(content=twilio_response_xml, media_type="text/xml")
+
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True) # exc_info=True para el traceback completo
-        return "ERROR"
+        logger.error(f"Webhook error: {e}", exc_info=True)
+        # En caso de error, siempre devuelve un TwilioML válido.
+        error_twiml = MessagingResponse()
+        error_twiml.message("Lo siento, algo salió mal al procesar tu solicitud. Por favor, inténtalo de nuevo más tarde.")
+        return PlainTextResponse(content=str(error_twiml), media_type="text/xml")
