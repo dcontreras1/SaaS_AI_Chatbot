@@ -1,6 +1,7 @@
+# db/models/company.py
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import relationship
-from db.models.base import Base
+from db.database import Base
 
 class Company(Base):
     __tablename__ = "companies"
@@ -15,6 +16,5 @@ class Company(Base):
     api_key = Column(String, nullable=False, unique=True)
 
     appointments = relationship("Appointment", back_populates="company", cascade="all, delete")
-    clients = relationship("Client", back_populates="company")
     messages = relationship("Message", back_populates="company")
     sessions = relationship("ChatSession", back_populates="company")
