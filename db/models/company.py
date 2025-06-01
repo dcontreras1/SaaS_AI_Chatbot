@@ -1,4 +1,3 @@
-# db/models/company.py
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import relationship
 from db.database import Base
@@ -14,7 +13,8 @@ class Company(Base):
     company_number = Column(String, nullable=False, unique=True)
     whatsapp_token = Column(String, nullable=False)
     api_key = Column(String, nullable=False, unique=True)
+    calendar_email = Column(String, nullable=True, unique=True)
 
     appointments = relationship("Appointment", back_populates="company", cascade="all, delete")
     messages = relationship("Message", back_populates="company")
-    sessions = relationship("ChatSession", back_populates="company")
+    chat_sessions = relationship("ChatSession", back_populates="company")
