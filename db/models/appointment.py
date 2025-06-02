@@ -12,6 +12,7 @@ class Appointment(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     scheduled_for = Column(DateTime, nullable=False)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    status = Column(String, nullable=False, default='scheduled')
 
     # La relación con la empresa se mantiene
     company = relationship("Company", back_populates="appointments")
