@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y build-essential libpq-dev
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# --- AGREGAR ESTA LÍNEA PARA DESCARGAR EL MODELO DE SPACY ---
+RUN python -m spacy download es_core_news_sm
+
 # Copiar el resto del código
 COPY . .
 
