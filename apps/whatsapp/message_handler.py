@@ -9,59 +9,45 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 
-# Importaciones ajustadas a tu estructura de módulos
 from apps.whatsapp.chat_session_repository import get_or_create_session, update_session_data, clear_session_slots
 from apps.whatsapp import message_repository
 from apps.ai.response_generator import generate_response
 from apps.ai.nlp_utils import detect_intent, extract_contact_info
 from db.database import get_db_session
 from db.models.company import Company
-from db.models.appointment import Appointment # ¡Asegúrate de que este modelo exista y esté importado correctamente!
+from db.models.appointment import Appointment
 
 logger = logging.getLogger(__name__)
 
-# Respuestas predefinidas (Solo mensajes de flujo y generales, sin información específica de la empresa)
 RESPONSES = {
     "greet": "¡Hola! Soy el asistente virtual de {company_name}. ¿En qué puedo ayudarte hoy?",
     "farewell": "¡Adiós! Que tengas un excelente día.",
     "ask_bot_identity": "Soy un asistente virtual, diseñado para ayudarte con tus consultas y agendar citas para {company_name}.",
     "ask_bot_capabilities": "Puedo proporcionarte información sobre nuestro horario, precios, ubicación, catálogo de servicios y agendar citas. ¿Qué necesitas?",
-    
-    # Mensajes específicos de agendamiento
     "appointment_name_request": "Para agendar tu cita, necesito tu nombre completo, por favor.",
     "appointment_datetime_request": "Necesito la fecha y hora para tu cita. ¿Podrías indicarme el día y la hora, por ejemplo: 'el lunes a las 3pm' o 'el 15 de junio a las 10 de la mañana'?",
     "appointment_scheduled": "¡Excelente! Tu cita ha sido agendada con éxito para el {datetime} a nombre de {name}. Recibirás una confirmación en breve.",
     "appointment_reschedule_cancel": "Para reagendar o cancelar una cita, por favor, responde con 'reagendar cita' o 'cancelar cita' y el bot te guiará.",
-    
-    # Mensajes específicos de cancelación
     "cancel_request": "Entendido. ¿Qué cita te gustaría cancelar? Por favor, dime la fecha y hora.",
     "cancel_confirm": "¿Estás seguro de que quieres cancelar la cita del {datetime} a nombre de {name}? Responde 'Sí' para confirmar o 'No' para mantenerla.",
     "cancel_success": "¡Tu cita del {datetime} a nombre de {name} ha sido cancelada con éxito! Esperamos verte pronto.",
-    "cancel_not_found": "Lo siento, no encontré ninguna cita para cancelar con la información que me diste. ¿Podrías darme más detalles (fecha y hora, o tu nombre completo si es diferente al número de teléfono)?",
+    "cancel_not_found": "Lo siento, no encontré ninguna cita para cancelar con la información que me diste. ¿Podrías darme más detalles (fecha y hora, o tu nombre completo si es diferente al registrado)?",
     "cancel_aborted": "De acuerdo, no se ha cancelado ninguna cita. ¿Hay algo más en lo que pueda ayudarte?",
     "cancel_invalid_confirmation": "Por favor, responde 'Sí' o 'No' para confirmar la cancelación.",
-    
-    # Mensajes de error/desconocido
     "unknown": "Lo siento, no entendí tu solicitud. ¿Podrías reformularla, por favor?",
     "error": "Lo siento, ha ocurrido un error interno muy grave y no puedo procesar tu solicitud en este momento. Por favor, inténtalo de nuevo más tarde.",
 }
 
 async def handle_incoming_message(
     user_phone_number: str,
-    company_whatsapp_number: str, # Este es el número de Twilio que recibe el mensaje
+    company_whatsapp_number: str,
     message_text: str,
     message_sid: Optional[str] = None
 ) -> str:
-    """
-    Maneja los mensajes entrantes de WhatsApp.
-    """
     logger.info(f"Procesando mensaje - De: {user_phone_number}, Para: {company_whatsapp_number}, Mensaje: '{message_text}', SID: {message_sid}")
 
     async with get_db_session() as db_session:
-        logger.info(f"DEBUG HANDLER: Sesión de DB OBTENIDA (ID: {id(db_session)}, Tipo: {type(db_session)})")
         try:
-            # 1. Obtener información de la compañía
-            # Buscar la compañía por su company_number (que en este caso es el número de Twilio con prefijo)
             company_phone_in_db = "whatsapp:" + company_whatsapp_number 
             result = await db_session.execute(
                 select(Company).where(Company.company_number == company_phone_in_db)
@@ -72,12 +58,10 @@ async def handle_incoming_message(
                 logger.error(f"Compañía no encontrada para el número de WhatsApp: {company_phone_in_db}")
                 return _generate_twilio_response(RESPONSES["error"])
             
-            # 2. Cargar o crear la sesión de chat
             chat_session = await get_or_create_session(user_phone_number, company.id, db_session)
             session_data = chat_session.session_data if chat_session.session_data is not None else {}
             logger.info(f"DEBUG HANDLER: Sesión de chat persistente cargada (ID: {chat_session.id}). Datos: {session_data}")
 
-            # 3. Guardar el mensaje entrante
             await message_repository.add_message(
                 db_session=db_session,
                 message_sid=message_sid,
@@ -88,54 +72,44 @@ async def handle_incoming_message(
                 chat_session_id=chat_session.id
             )
             
-            # 4. Extraer entidades (nombre, fecha/hora) del mensaje actual usando NLP
             current_message_entities = await extract_contact_info(message_text)
             extracted_name_nlp = current_message_entities.get('name')
             extracted_datetime_nlp = current_message_entities.get('datetime')
-            
+
             logger.info(f"DEBUG HANDLER: Entidades extraídas con NLP_UTILS: Nombre={extracted_name_nlp}, Fecha/Hora={extracted_datetime_nlp}")
 
-            # 5. Si hay entidades extraídas, actualiza la sesión inmediatamente
             if extracted_name_nlp:
                 session_data['client_name'] = extracted_name_nlp
                 session_data['waiting_for_name'] = False 
                 logger.info(f"DEBUG SLOTS: Nombre '{extracted_name_nlp}' extraído por NLP y guardado en sesión.")
-            
+
             if extracted_datetime_nlp:
-                # Si estamos en flujo de cancelación, la fecha/hora es para cancelar
                 if session_data.get('in_cancel_flow'):
                     session_data['appointment_datetime_to_cancel'] = extracted_datetime_nlp.isoformat()
                     session_data['waiting_for_cancel_datetime'] = False
                     logger.info(f"DEBUG SLOTS: Fecha/Hora '{extracted_datetime_nlp}' para CANCELACIÓN extraída por NLP.")
-                else: # Si no es cancelación, es para agendamiento
+                else: 
                     session_data['appointment_datetime'] = extracted_datetime_nlp.isoformat()
                     session_data['waiting_for_datetime'] = False
                     logger.info(f"DEBUG SLOTS: Fecha/Hora '{extracted_datetime_nlp}' para AGENDAMIENTO extraída por NLP.")
 
-            # 6. Determinar la intención principal del mensaje
             intent = await detect_intent(message_text)
             logger.info(f"DEBUG HANDLER: Intención detectada del mensaje actual: {intent}")
 
             final_response_text = ""
 
-            # --- LÓGICA DE MANEJO DE FLUJOS (CANCELACIÓN Y AGENDAMIENTO) ---
-
             # PRIORIDAD 1: Flujo de Cancelación
             if intent == "cancel_appointment" or session_data.get('in_cancel_flow', False):
                 session_data['in_cancel_flow'] = True
                 session_data['in_appointment_flow'] = False 
-                
-                # Estado: Esperando la fecha/hora de la cita a cancelar
+
                 if session_data.get('waiting_for_cancel_datetime', True) and not session_data.get('appointment_datetime_to_cancel'):
                     final_response_text = RESPONSES["cancel_request"]
                     session_data['waiting_for_cancel_datetime'] = True
                     logger.info("DEBUG CANCEL: Pidiendo fecha/hora para cancelar.")
 
-                # Estado: Tenemos la fecha/hora para cancelar, necesitamos confirmación
                 elif session_data.get('appointment_datetime_to_cancel') and not session_data.get('waiting_for_cancel_confirmation'):
                     cancel_datetime_obj = datetime.fromisoformat(session_data['appointment_datetime_to_cancel'])
-                    
-                    # Buscar la cita en la DB
                     result = await db_session.execute(
                         select(Appointment).where(
                             Appointment.client_phone_number == user_phone_number,
@@ -161,8 +135,7 @@ async def handle_incoming_message(
                         await clear_session_slots(chat_session, db_session, preserve_name=True) 
                         session_data = chat_session.session_data
                         logger.info("DEBUG CANCEL: No se encontró la cita con los datos proporcionados.")
-                
-                # Estado: Esperando confirmación final (Sí/No)
+
                 elif session_data.get('waiting_for_cancel_confirmation'):
                     message_text_lower = message_text.lower().strip()
                     if message_text_lower == "sí" or message_text_lower == "si":
@@ -173,7 +146,6 @@ async def handle_incoming_message(
                                 if appointment_to_cancel:
                                     appointment_to_cancel.status = 'canceled'
                                     db_session.add(appointment_to_cancel)
-                                    
                                     final_response_text = RESPONSES["cancel_success"].format(
                                         name=appointment_to_cancel.client_name,
                                         datetime=_format_datetime_for_display(appointment_to_cancel.datetime)
@@ -204,7 +176,7 @@ async def handle_incoming_message(
                     else:
                         final_response_text = RESPONSES["cancel_invalid_confirmation"]
                         logger.info("DEBUG CANCEL: Respuesta de confirmación inválida para cancelación.")
-                
+
                 else: 
                     final_response_text = RESPONSES["cancel_request"]
                     session_data['waiting_for_cancel_datetime'] = True
@@ -214,19 +186,20 @@ async def handle_incoming_message(
             elif intent == "schedule_appointment" or session_data.get('in_appointment_flow', False):
                 session_data['in_appointment_flow'] = True
                 session_data['in_cancel_flow'] = False 
-                
-                # Estado 1: Necesitamos el nombre del cliente
+
                 if session_data.get('waiting_for_name', True) and not session_data.get('client_name'):
                     if not extracted_name_nlp:
                         if intent == "provide_contact_info_followup" or \
-                           (intent == "unknown" and not re.search(r'\?$', message_text.strip())):
+                            (intent == "unknown" and not re.search(r'\?$', message_text.strip())):
                             potential_name_from_msg = message_text.strip().title()
                             if len(potential_name_from_msg) > 2 and \
-                               not any(keyword in potential_name_from_msg.lower() for keyword in ["agendar", "cita", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo", "pm", "am", "hola", "gracias", "por favor", "si", "no", "cancelar"]):
+                                not any(keyword in potential_name_from_msg.lower() for keyword in [
+                                    "agendar", "cita", "lunes", "martes", "miércoles", "jueves", "viernes",
+                                    "sábado", "domingo", "pm", "am", "hora", "cancelar", "reagendar"
+                                ]):
                                 session_data['client_name'] = potential_name_from_msg
                                 session_data['waiting_for_name'] = False
                                 logger.info(f"DEBUG SLOTS: Nombre '{potential_name_from_msg}' inferido del mensaje.")
-                        
                     if session_data.get('client_name'): 
                         logger.info("DEBUG SLOTS: Nombre obtenido. Pasando a pedir fecha/hora.")
                         final_response_text = RESPONSES["appointment_datetime_request"]
@@ -236,7 +209,6 @@ async def handle_incoming_message(
                         session_data['waiting_for_name'] = True 
                         logger.info("DEBUG SLOTS: Agendamiento - Falta nombre. Volviendo a preguntar.")
 
-                # Estado 2: Tenemos el nombre, necesitamos la fecha/hora
                 elif session_data.get('client_name') and (session_data.get('waiting_for_datetime', True) or not session_data.get('appointment_datetime')):
                     if not session_data.get('appointment_datetime'): 
                         final_response_text = RESPONSES["appointment_datetime_request"]
@@ -246,7 +218,6 @@ async def handle_incoming_message(
                         logger.info("DEBUG SLOTS: Fecha/Hora obtenida. Procediendo a agendar cita.")
                         try:
                             app_datetime_obj = datetime.fromisoformat(session_data['appointment_datetime'])
-                            
                             new_appointment = Appointment(
                                 client_phone_number=user_phone_number,
                                 client_name=session_data['client_name'],
@@ -255,7 +226,6 @@ async def handle_incoming_message(
                                 status='scheduled'
                             )
                             db_session.add(new_appointment)
-
                             final_response_text = RESPONSES["appointment_scheduled"].format(
                                 name=session_data['client_name'],
                                 datetime=_format_datetime_for_display(app_datetime_obj)
@@ -270,7 +240,6 @@ async def handle_incoming_message(
                             session_data = chat_session.session_data
                             logger.info("DEBUG SLOTS: Error al agendar cita. Slots limpiados.")
 
-                # Estado 3: Ambos datos obtenidos y agendada la cita.
                 elif session_data.get('client_name') and session_data.get('appointment_datetime'):
                     logger.info("DEBUG SLOTS: Agendamiento - Todos los datos obtenidos. Re-confirmando/Agendando.")
                     try:
@@ -307,72 +276,55 @@ async def handle_incoming_message(
                     else:
                         final_response_text = RESPONSES["unknown"]
 
-            # PRIORIDAD 3: Flujo General (si ninguna de las anteriores se activó)
+            # PRIORIDAD 3: Flujo General (ni agendamiento ni cancelación)
             else:
                 logger.info("DEBUG: Consultando a Gemini (flujo general).")
-                
-                llm_response_text = await generate_response(
+                llm_response = await generate_response(
                     user_message=message_text, 
-                    company={ # Se pasa toda la información relevante de la compañía al LLM
+                    company={
                         "name": company.name, 
                         "schedule": company.schedule, 
                         "catalog_url": company.catalog_url, 
                         "calendar_email": company.calendar_email
                     },
-                    current_intent=intent # Pasar la intención actual puede ayudar al LLM
+                    current_intent=intent,
+                    session_data=session_data
                 )
-                final_response_text = llm_response_text
-                
-                # Si la respuesta del LLM sugiere un flujo de agendamiento o cancelación, iniciarlo
-                if "agendar cita" in final_response_text.lower() or "agenda una cita" in final_response_text.lower() or "reservar cita" in final_response_text.lower() or intent == "schedule_appointment":
-                    session_data['in_appointment_flow'] = True
-                    session_data['in_cancel_flow'] = False
-                    session_data['waiting_for_name'] = True # Asumir que necesitamos el nombre al iniciar el flujo
-                    session_data['waiting_for_datetime'] = True # Asumir que necesitamos la fecha/hora
-                    # Aquí decidimos si el LLM ya dio una respuesta suficiente o si iniciamos el flujo preguntando el nombre
-                    if not session_data.get('client_name'): # Si el LLM no extrajo el nombre y no lo tenemos
-                        final_response_text = RESPONSES["appointment_name_request"] # La primera pregunta del flujo
-                    elif not session_data.get('appointment_datetime'): # Si el LLM no extrajo la fecha y no la tenemos
-                         final_response_text = RESPONSES["appointment_datetime_request"] # La segunda pregunta del flujo
-                    # Si el LLM ya proporcionó ambos, se procesará en el siguiente ciclo o ya se habrá agendado
+                if isinstance(llm_response, dict):
+                    final_response_text = llm_response.get("text", "")
+                    conversation_state = llm_response.get("conversation_state", "in_progress")
+                else:
+                    final_response_text = llm_response
+                    conversation_state = "in_progress"
 
-                elif any(k in final_response_text.lower() for k in ["cancelar cita", "anular cita", "eliminar cita"]) or intent == "cancel_appointment":
-                    session_data['in_cancel_flow'] = True
-                    session_data['in_appointment_flow'] = False
-                    session_data['waiting_for_cancel_datetime'] = True # La primera pregunta del flujo de cancelación
-                    final_response_text = RESPONSES["cancel_request"]
-                
-                else: # Si no es agendamiento ni cancelación, resetear flags de flujo
+                # Actualización de flags según Gemini
+                if conversation_state == "started":
+                    session_data['conversation_started'] = True
+                    session_data['conversation_ended'] = False
+                elif conversation_state == "ended":
+                    session_data['conversation_ended'] = True
                     session_data['in_appointment_flow'] = False
                     session_data['in_cancel_flow'] = False
-                    # Resetear flags de espera para un nuevo inicio de flujo
-                    session_data['waiting_for_name'] = True
-                    session_data['waiting_for_datetime'] = True
-                    session_data['waiting_for_cancel_datetime'] = True
-                    session_data['waiting_for_cancel_confirmation'] = False
-                    session_data['confirm_cancel_id'] = None
-                    session_data['appointment_datetime_to_cancel'] = None
+                else:
+                    session_data['conversation_started'] = True
+                    session_data['conversation_ended'] = False
 
-            # --- FIN LÓGICA DE MANEJO DE FLUJOS ---
-
-            # 7. Guardar el estado actualizado de la sesión en la DB
             await update_session_data(chat_session, session_data, db_session)
             await db_session.commit()
             logger.info("DEBUG SLOTS: Estado de sesión guardado. Datos: %s", chat_session.session_data)
 
-            # 8. Guardar la respuesta del bot en la DB
             await message_repository.add_message(
                 db_session=db_session,
                 message_sid=f"bot-{uuid.uuid4()}",
                 body=final_response_text,
                 direction="out",
-                sender_phone_number=company_whatsapp_number, # Se usa el número de la compañía que recibió el mensaje
+                sender_phone_number=company_whatsapp_number,
                 company_id=company.id,
                 chat_session_id=chat_session.id
             )
             await db_session.commit() 
             logger.info("Cambios en la base de datos confirmados.")
-            
+
             logger.info(f"DEBUG FINAL: Respuesta del bot ANTES de Twilio: '{final_response_text[0:100]}...'")
             return _generate_twilio_response(final_response_text)
 
@@ -384,19 +336,12 @@ async def handle_incoming_message(
             logger.error(f"Error general en handle_incoming_message: {e}", exc_info=True)
             return _generate_twilio_response(RESPONSES["error"])
 
-
 def _generate_twilio_response(message: str) -> str:
-    """
-    Genera la respuesta TwiML para enviar un mensaje.
-    """
     response = MessagingResponse()
     response.message(message)
     return str(response)
 
 def _format_datetime_for_display(dt_obj: datetime) -> str:
-    """
-    Formatea un objeto datetime a una cadena legible para el usuario (ej. "lunes, 31 de mayo a las 3:00 p.m.").
-    """
     dias_semana = {
         0: "lunes", 1: "martes", 2: "miércoles", 3: "jueves",
         4: "viernes", 5: "sábado", 6: "domingo"
@@ -406,11 +351,7 @@ def _format_datetime_for_display(dt_obj: datetime) -> str:
         5: "mayo", 6: "junio", 7: "julio", 8: "agosto",
         9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre"
     }
-    
     dia_semana_str = dias_semana[dt_obj.weekday()]
     mes_str = nombres_meses[dt_obj.month]
-    
-    # Formato de 12 horas con AM/PM
     hora_str = dt_obj.strftime("%I:%M %p").replace("AM", "a.m.").replace("PM", "p.m.").lower()
-    
     return f"{dia_semana_str}, {dt_obj.day} de {mes_str} a las {hora_str}"
