@@ -1,14 +1,20 @@
 import os
 import json
 import httpx
+import logging
+from typing import Dict, Any, List
+
+from apps.ai.prompts import build_prompt
+
+logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# Usando explicitly el modelo "gemini-1.5-flash-latest"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 
-async def call_gemini_api(prompt: str) -> str:
+async def call_gemini_api(messages: list) -> str:
     """
     Realiza una llamada a la API de Gemini usando el modelo gemini-1.5-flash-latest.
+    Ahora acepta una lista de mensajes formateada para la API de Gemini.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY no está configurada en el entorno.")
@@ -16,16 +22,13 @@ async def call_gemini_api(prompt: str) -> str:
     headers = {
         "Content-Type": "application/json"
     }
-    # Gemini espera el prompt en el campo 'contents', como lista de mensajes.
+    
     data = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }
-        ]
+        "contents": messages # <-- Se pasa la lista de mensajes directamente
     }
     params = {"key": GEMINI_API_KEY}
+
+    logger.debug(f"DEBUG GEMINI API: Enviando a Gemini: {json.dumps(data, indent=2)}")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -36,32 +39,52 @@ async def call_gemini_api(prompt: str) -> str:
         )
         response.raise_for_status()
         response_json = response.json()
-        # Gemini responde con text en: response_json['candidates'][0]['content']['parts'][0]['text']
+        logger.debug(f"DEBUG GEMINI API: Respuesta cruda de Gemini: {json.dumps(response_json, indent=2)}")
+
         try:
             return response_json['candidates'][0]['content']['parts'][0]['text']
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error al parsear respuesta de Gemini: {e}. Respuesta completa: {response_json}", exc_info=True)
             return str(response_json)
 
-async def generate_response(user_message, company, current_intent, session_data):
-    context = f"""
-    Conversación previa: {session_data}
-    Usuario: {user_message}
-    Empresa: {company['name']}
-    Intención detectada: {current_intent}
+async def generate_response(user_message: str, company: Dict[str, Any], current_intent: str, session_data: Dict[str, Any], chat_history_for_gemini: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    prompt = context + """
-    Instrucciones:
-    - Si detectas que es el primer mensaje del usuario o un saludo, responde con "conversation_state": "started".
-    - Si detectas que la conversación está finalizando (despedida, cierre), responde con "conversation_state": "ended".
-    - Si es parte de una conversación en progreso, responde con "conversation_state": "in_progress".
-    - Junto a esto, entrega la respuesta natural al usuario en el campo "text".
+    Genera una respuesta del bot utilizando Gemini, basándose en el mensaje del usuario,
+    la información de la compañía, la intención detectada y los datos de la sesión.
+    Retorna un diccionario con 'text' y 'conversation_state'.
+    """
+    # Construir el prompt completo utilizando la función build_prompt
+    # Pasar todos los datos necesarios para que build_prompt construya un contexto rico
+    messages_for_gemini = build_prompt(
+        user_message=user_message,
+        company=company,
+        chat_history=chat_history_for_gemini, # Usar el historial real
+        session_data=session_data,
+        intent=current_intent
+    )
 
-    Responde en formato JSON. Ejemplo:
-    {"text": "¡Hola! ¿En qué puedo ayudarte?", "conversation_state": "started"}
-    """
-    response = await call_gemini_api(prompt)
+    response_from_gemini_text = await call_gemini_api(messages_for_gemini)
+
     try:
-        result = json.loads(response)
+        # Intentar parsear la respuesta de Gemini como JSON
+        # Puede que Gemini envuelva el JSON en ```json...```
+        cleaned_response = response_from_gemini_text.strip()
+        if cleaned_response.startswith('```json') and cleaned_response.endswith('```'):
+            cleaned_response = cleaned_response[7:-3].strip()
+        
+        result = json.loads(cleaned_response)
+        
+        # Validar que el resultado tenga las claves esperadas
+        if "text" not in result or "conversation_state" not in result:
+            logger.warning(f"Respuesta de Gemini no tiene el formato esperado (faltan 'text' o 'conversation_state'). Respuesta: {result}")
+            # Fallback a un formato válido si el LLM no sigue las instrucciones
+            result = {"text": response_from_gemini_text, "conversation_state": "in_progress"}
+            
         return result
-    except Exception:
-        return {"text": response, "conversation_state": "in_progress"}
+    except json.JSONDecodeError as e:
+        logger.error(f"Error al decodificar JSON de la respuesta de Gemini: {e}. Respuesta cruda: {response_from_gemini_text}", exc_info=True)
+        # Si la respuesta no es un JSON válido, devuélvela como texto con un estado por defecto.
+        return {"text": response_from_gemini_text, "conversation_state": "in_progress"}
+    except Exception as e:
+        logger.error(f"Error inesperado en generate_response: {e}", exc_info=True)
+        return {"text": "Lo siento, hubo un error al generar mi respuesta.", "conversation_state": "unknown"}
