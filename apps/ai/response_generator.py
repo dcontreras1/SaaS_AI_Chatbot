@@ -1,88 +1,42 @@
-import os
 import json
-import httpx
-import logging # Asegúrate de importar logging
+import logging
+from apps.ai.gemini_client import get_api_response
+from db.database import get_messages_by_session_id
 
-logger = logging.getLogger(__name__) # Inicializa el logger
+logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# Usando explicitamente el modelo "gemini-1.5-flash-latest"
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
-
-async def call_gemini_api(prompt: str) -> str:
+async def generate_response(user_message, company, current_intent, session_id):
     """
-    Realiza una llamada a la API de Gemini usando el modelo gemini-1.5-flash-latest.
+    Genera una respuesta usando el historial real almacenado en la base de datos.
     """
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY no está configurada en el entorno.")
 
-    headers = {
-        "Content-Type": "application/json"
-    }
-    # Gemini espera el prompt en el campo 'contents', como lista de mensajes.
-    data = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": prompt}]
-            }
-        ]
-    }
-    params = {"key": GEMINI_API_KEY}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            response = await client.post(
-                GEMINI_API_URL,
-                headers=headers,
-                params=params,
-                data=json.dumps(data)
-            )
-            # --- CAMBIO CLAVE ANTERIOR PARA DEBUGGING ---
-            if response.status_code != 200:
-                logger.error(f"Gemini API devolvió un estado {response.status_code}. Cuerpo de la respuesta: {response.text}")
-            # ---------------------------------------------
-
-            response.raise_for_status()
-            response_json = response.json()
-            # Gemini responde con text en: response_json['candidates'][0]['content']['parts'][0]['text']
-            try:
-                return response_json['candidates'][0]['content']['parts'][0]['text']
-            except Exception as e:
-                logger.error(f"Error al analizar la respuesta JSON de Gemini: {e}. Respuesta completa: {response_json}")
-                return str(response_json)
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Error de estado HTTP de la API de Gemini: {e.response.status_code} - {e.response.text}", exc_info=True)
-            raise # Re-lanza la excepción para que sea manejada por el llamador
-        except httpx.RequestError as e:
-            logger.error(f"Error de solicitud a la API de Gemini: {e}", exc_info=True)
-            raise
-        except Exception as e:
-            logger.error(f"Error inesperado durante la llamada a la API de Gemini: {e}", exc_info=True)
-            raise
-
-# --- ESTA ES LA FUNCIÓN 'generate_response' QUE FALTABA ---
-async def generate_response(user_message, company, current_intent, session_data):
-    context = f"""
-    Conversación previa: {session_data}
-    Usuario: {user_message}
-    Empresa: {company['name']}
-    Intención detectada: {current_intent}
-    """
-    prompt = context + """
-    Instrucciones:
-    - Si detectas que es el primer mensaje del usuario o un saludo, responde con "conversation_state": "started".
-    - Si detectas que la conversación está finalizando (despedida, cierre), responde con "conversation_state": "ended".
-    - Si es parte de una conversación en progreso, responde con "conversation_state": "in_progress".
-    - Junto a esto, entrega la respuesta natural al usuario en el campo "text".
-
-    Responde en formato JSON. Ejemplo:
-    {"text": "¡Hola! ¿En qué puedo ayudarte?", "conversation_state": "started"}
-    """
-    response = await call_gemini_api(prompt)
     try:
-        result = json.loads(response)
-        return result
-    except Exception:
-        # Si Gemini no retorna JSON válido, retorna su respuesta cruda como texto
-        return {"text": response, "conversation_state": "in_progress"} # Default a in_progress si falla el parseo
+        # 1. Obtener historial desde la base de datos (formato: [{"sender": "user", "message": "..."}, ...])
+        raw_messages = await get_messages_by_session_id(session_id)
+
+        # 2. Convertir historial al formato Gemini: [{"role": "user", "parts": [{"text": "..."}]}, ...]
+        message_history = []
+        for msg in raw_messages:
+            role = "user" if msg["sender"] == "user" else "model"
+            message_history.append({"role": role, "parts": [{"text": msg["message"]}]})
+
+        # 3. Agregar el nuevo mensaje del usuario (todavía no guardado en DB)
+        message_history.append({
+            "role": "user",
+            "parts": [{"text": f"Empresa: {company['name']}. Intención: {current_intent}. Mensaje: {user_message}"}]
+        })
+
+        # 4. Llamar a Gemini usando el historial completo
+        response_text = await get_api_response(message_history)
+
+        # 5. Parsear respuesta como JSON
+        try:
+            result = json.loads(response_text)
+            return result
+        except Exception:
+            logger.warning("La respuesta de Gemini no era JSON válido. Se usará texto plano.")
+            return {"text": response_text, "conversation_state": "in_progress"}
+
+    except Exception as e:
+        logger.error(f"Error en generate_response: {e}", exc_info=True)
+        return {"text": "Lo siento, ocurrió un error generando la respuesta.", "conversation_state": "error"}
