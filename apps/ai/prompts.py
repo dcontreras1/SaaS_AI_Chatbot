@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -9,7 +10,7 @@ def build_prompt(
     user_message: str,
     company: Dict[str, Any],
     chat_history: Optional[List[Dict[str, Any]]] = None,
-    session_data: Optional[Dict[str, Any]] = None, # <-- Añadir session_data aquí
+    session_data: Optional[Dict[str, Any]] = None, # <<-- Asegúrate de que este parámetro esté aquí
     intent: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
@@ -33,93 +34,63 @@ def build_prompt(
         f"Información de la empresa:",
         f"- Nombre: {company['name']}",
         f"- Rubro: {company.get('industry', 'No especificado')}",
-        f"- Catálogo: {company.get('catalog_url', 'No proporcionado')}",
-        f"- Horarios: {company.get('schedule', 'No especificado')}",
-        f"- Número de contacto (WhatsApp): {company.get('company_number', 'No proporcionado')}",
-        f"- Email de calendario: {company.get('calendar_email', 'No proporcionado')}",
+        f"- Horario de atención: {company.get('schedule', 'No disponible')}",
+        f"- Enlace al catálogo/servicios: {company.get('catalog_url', 'No disponible')}",
+        f"- Número de contacto: {company.get('company_number', 'No disponible')}",
+        f"- Correo de calendario: {company.get('calendar_email', 'No disponible')}",
+        f"- API Key: {company.get('api_key', 'N/A')}", # No mostrar API Key a usuarios, solo para el contexto del LLM
+        f"- Token de WhatsApp: {company.get('whatsapp_token', 'N/A')}", # No mostrar a usuarios
         f"",
-        f"Instrucciones de formato de respuesta JSON (¡IMPORTANTE!):",
-        f"Tu respuesta DEBE ser un objeto JSON válido con dos claves: 'text' y 'conversation_state'.",
-        f"- 'text': La respuesta en lenguaje natural para el usuario.",
-        f"- 'conversation_state': Un string que indica el estado actual de la conversación. Puede ser 'started', 'in_progress', 'awaiting_name', 'awaiting_datetime', 'awaiting_cancel_datetime', 'awaiting_cancel_confirmation', 'ended', 'unknown'.",
+        f"Contexto de la conversación actual (datos de sesión): {json.dumps(session_data)}", # Añadir datos de sesión aquí
+        f"Intención del usuario detectada: {intent or 'No detectada'}",
         f"",
-        f"Estado actual de la sesión (session_data): {session_data}",
-        f"Intención detectada: {intent}",
+        f"Instrucciones para la respuesta:",
+        f"1. Responde en español.",
+        f"2. Si la intención es 'greet', 'farewell', 'ask_schedule', 'ask_catalog', 'ask_address', 'ask_phone', 'ask_email', 'ask_bot_identity', 'ask_bot_capabilities', prioriza el uso de la información de la empresa.",
+        f"3. Si la intención es 'schedule_appointment' o 'cancel_appointment', no intentes realizar la acción aquí. El sistema la manejará. Solo responde con un mensaje de bienvenida o un reconocimiento.",
+        f"4. Si la intención es 'provide_contact', agradece al usuario por la información y confirma que un agente se pondrá en contacto.",
+        f"5. Para 'fallback' o si no hay información suficiente, pide más detalles o sugiere opciones.",
+        f"6. Si la respuesta final se puede estructurar como JSON (por ejemplo, para indicar un cambio de estado en la conversación), hazlo. Ejemplo: {{ \"text\": \"Hola, ¿en qué puedo ayudarte?\", \"conversation_state\": \"initial\" }}",
+        f"7. Si la respuesta es solo texto, que sea directamente el texto. No uses JSON.",
+        f"8. No menciones tu API Key o token de WhatsApp al usuario final.",
+        f"9. La hora actual es: {datetime.now(timezone.utc).isoformat()} (UTC). Tenla en cuenta para referencias relativas al tiempo.",
+        f"10. **Formato de respuesta si es JSON**: {{ \"text\": \"mensaje para el usuario\", \"conversation_state\": \"nuevo_estado\" }}",
+        f"    Posibles estados de conversación: \"initial\", \"in_progress\", \"waiting_for_name\", \"waiting_for_datetime\", \"waiting_for_cancellation_confirmation\", \"completed\", \"error\"."
+        f"    **Si no hay un cambio de estado significativo, no incluyas 'conversation_state'.**"
+        f"    **Si NO es un JSON, responde solo con el texto.**"
     ]
-
-    # Añadir información de slots si están presentes en session_data
-    if session_data.get("client_name"):
-        system_prompt_parts.append(f"Información de cita actual recopilada: Nombre del cliente: {session_data['client_name']}.")
-    if session_data.get("appointment_datetime"):
-        try:
-            appointment_datetime_obj = datetime.fromisoformat(session_data["appointment_datetime"])
-            # Asegurarse de que el objeto datetime no tiene información de zona horaria si se va a usar isoformat directamente sin 'Z'
-            # para evitar problemas con la representación
-            if appointment_datetime_obj.tzinfo is None:
-                appointment_datetime_display = appointment_datetime_obj.isoformat() + 'Z' # Añadir 'Z' para UTC naive como estándar
-            else:
-                appointment_datetime_display = appointment_datetime_obj.isoformat()
-            system_prompt_parts.append(f"Información de cita actual recopilada: Fecha y hora de la cita: {appointment_datetime_display}.")
-        except ValueError:
-            logger.warning(f"Fecha/hora de cita inválida en session_data: {session_data['appointment_datetime']}")
-
-    if session_data.get("appointment_datetime_to_cancel"):
-        try:
-            cancel_datetime_obj = datetime.fromisoformat(session_data["appointment_datetime_to_cancel"])
-            if cancel_datetime_obj.tzinfo is None:
-                cancel_datetime_display = cancel_datetime_obj.isoformat() + 'Z'
-            else:
-                cancel_datetime_display = cancel_datetime_obj.isoformat()
-            system_prompt_parts.append(f"Información de cancelación recopilada: Fecha y hora de la cita a cancelar: {cancel_datetime_display}.")
-        except ValueError:
-            logger.warning(f"Fecha/hora de cancelación inválida en session_data: {session_data['appointment_datetime_to_cancel']}")
-
-
-    # --- Lógica específica para guiar a Gemini según el estado ---
-    if intent == "schedule_appointment":
-        if session_data.get("waiting_for_name"):
-            system_prompt_parts.append("El usuario acaba de pedir una cita y se le ha solicitado su nombre. El mensaje actual del usuario DEBE contener su nombre. Extráelo y confirma que tienes el nombre, luego solicita la fecha y hora de la cita.")
-            system_prompt_parts.append("Tu 'conversation_state' debe ser 'awaiting_datetime' después de obtener el nombre.")
-        elif session_data.get("waiting_for_datetime"):
-            system_prompt_parts.append("El usuario ha proporcionado su nombre y se le ha solicitado la fecha y hora de la cita. El mensaje actual del usuario DEBE contener la fecha y hora. Extráelo y confirma si es posible, luego solicita el número de teléfono.")
-            system_prompt_parts.append("Tu 'conversation_state' debe ser 'in_progress' o 'awaiting_phone_number' (si agregas ese slot).")
-        # Considera añadir un estado para "awaiting_phone_number" si lo requieres.
-        # if session_data.get("waiting_for_phone_number"):
-        #     system_prompt_parts.append("El usuario ha proporcionado nombre y fecha/hora, y se le ha solicitado el número de teléfono. El mensaje actual del usuario DEBE contener su número de teléfono. Extráelo y confirma la cita.")
-        #     system_prompt_parts.append("Tu 'conversation_state' debe ser 'in_progress' y la cita finalizada.")
-
-    elif intent == "cancel_appointment":
-        if session_data.get("waiting_for_cancel_datetime"):
-            system_prompt_parts.append("El usuario ha indicado que quiere cancelar una cita y se le ha solicitado la fecha y hora de la cita a cancelar. El mensaje actual del usuario DEBE contener la fecha y hora. Extráela y confirma si es posible, luego pide confirmación de cancelación.")
-            system_prompt_parts.append("Tu 'conversation_state' debe ser 'awaiting_cancel_confirmation'.")
-        elif session_data.get("waiting_for_cancel_confirmation"):
-            system_prompt_parts.append("El usuario ha indicado la cita a cancelar y se le ha pedido confirmación. El mensaje actual del usuario DEBE ser 'sí' o 'no'. Si es 'sí', confirma la cancelación. Si es 'no', aborta la cancelación.")
-            system_prompt_parts.append("Tu 'conversation_state' debe ser 'in_progress' o 'ended' si la acción se completa.")
-
-
-    # Construcción final del mensaje
-    system_prompt_content = "\n".join(system_prompt_parts)
 
     messages_to_gemini = []
 
-    # Combina el prompt del sistema con el primer mensaje del usuario si el historial empieza con el usuario
-    if chat_history and chat_history[0]["role"] == "user":
-        # Asegúrate de que el primer mensaje del historial tiene 'parts' y 'text'
-        first_user_text = chat_history[0].get('parts', [{}])[0].get('text', '')
-        combined_first_user_message = f"{system_prompt_content.strip()}\n\n{first_user_text.strip()}"
-        messages_to_gemini.append({"role": "user", "parts": [{"text": combined_first_user_message}]})
-        messages_to_gemini.extend(chat_history[1:])
-    else:
-        # Si el historial está vacío o comienza con el modelo, el primer mensaje del usuario se combina con el prompt del sistema
-        messages_to_gemini.append({"role": "user", "parts": [{"text": system_prompt_content.strip()}]})
-        if chat_history:
+    # El primer mensaje debe contener las instrucciones del sistema.
+    # Si hay historial de chat, el prompt del sistema se añade al primer mensaje del usuario.
+    # Si no hay historial, el primer mensaje es el prompt del sistema seguido del mensaje actual del usuario.
+
+    system_prompt_content = "\n".join(system_prompt_parts)
+
+    # Si hay historial de chat, integra el prompt del sistema en el primer mensaje del historial
+    if chat_history:
+        # El primer mensaje del historial (que debería ser del usuario) se combina con el system prompt
+        first_history_message = chat_history[0]
+        if first_history_message.get("role") == "user" and first_history_message.get("parts") and first_history_message["parts"][0].get("text"):
+            combined_text = f"{system_prompt_content}\n\n{first_history_message['parts'][0]['text']}"
+            messages_to_gemini.append({"role": "user", "parts": [{"text": combined_text}]})
+            messages_to_gemini.extend(chat_history[1:]) # Añadir el resto del historial
+        else:
+            # Si el primer mensaje no es del usuario o no tiene texto, añadir el system prompt separado
+            messages_to_gemini.append({"role": "user", "parts": [{"text": system_prompt_content}]})
             messages_to_gemini.extend(chat_history)
+    else:
+        # Si no hay historial, el primer mensaje es el system prompt
+        messages_to_gemini.append({"role": "user", "parts": [{"text": system_prompt_content}]})
 
-    # Asegurarse de incluir el mensaje actual del usuario al final
-    # Solo añadir si no fue ya combinado con el prompt del sistema
-    if not messages_to_gemini or messages_to_gemini[-1]["parts"][0]["text"] != f"{system_prompt_content.strip()}\n\n{user_message.strip()}":
-        messages_to_gemini.append({"role": "user", "parts": [{"text": user_message.strip()}]})
+    # Finalmente, añade el mensaje actual del usuario como el último mensaje.
+    # Asegúrate de que no se duplique si ya fue combinado.
+    last_message_text = user_message.strip()
+    
+    # Simple check para evitar duplicar el mensaje del usuario si ya fue parte del primer mensaje combinado
+    # Esto es una simplificación, podrías necesitar una lógica más robusta
+    if not messages_to_gemini or (messages_to_gemini[-1].get("role") == "user" and not messages_to_gemini[-1]["parts"][0]["text"].endswith(last_message_text)):
+         messages_to_gemini.append({"role": "user", "parts": [{"text": last_message_text}]})
 
-
-    logger.debug(f"DEBUG PROMPT: Mensajes finales para Gemini: {messages_to_gemini}")
     return messages_to_gemini

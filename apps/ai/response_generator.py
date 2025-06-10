@@ -5,25 +5,35 @@ from db.database import get_messages_by_session_id
 
 logger = logging.getLogger(__name__)
 
-async def generate_response(user_message, company, current_intent, session_id):
+async def generate_response(user_message, company, current_intent, session_id, session_data=None):
     """
-    Genera una respuesta usando el historial real almacenado en la base de datos.
+    Genera una respuesta usando el historial real almacenado en la base de datos y el modelo Gemini.
+    Puede recibir contexto adicional en session_data.
     """
-
     try:
-        # 1. Obtener historial desde la base de datos (formato: [{"sender": "user", "message": "..."}, ...])
+        # 1. Obtener historial desde la base de datos (formato: [{"direction": "in"/"out", "body": "..."}, ...])
         raw_messages = await get_messages_by_session_id(session_id)
 
-        # 2. Convertir historial al formato Gemini: [{"role": "user", "parts": [{"text": "..."}]}, ...]
+        # 2. Convertir historial al formato Gemini: [{"role": "user"/"model", "parts": [{"text": "..."}]}, ...]
         message_history = []
         for msg in raw_messages:
-            role = "user" if msg["sender"] == "user" else "model"
-            message_history.append({"role": role, "parts": [{"text": msg["message"]}]})
+            if msg["direction"] == "in":
+                role = "user"
+            else:
+                role = "model"
+            message_history.append({"role": role, "parts": [{"text": msg["body"]}]})
 
         # 3. Agregar el nuevo mensaje del usuario (todavía no guardado en DB)
+        user_message_text = f"Empresa: {company['name']}. Intención: {current_intent}. Mensaje: {user_message}"
+        if session_data:
+            # Puedes ajustar el formato del contexto según lo que uses en prompt engineering
+            user_message_text = (
+                f"Contexto conversacional: {session_data}\n"
+                + user_message_text
+            )
         message_history.append({
             "role": "user",
-            "parts": [{"text": f"Empresa: {company['name']}. Intención: {current_intent}. Mensaje: {user_message}"}]
+            "parts": [{"text": user_message_text}]
         })
 
         # 4. Llamar a Gemini usando el historial completo
@@ -40,3 +50,15 @@ async def generate_response(user_message, company, current_intent, session_id):
     except Exception as e:
         logger.error(f"Error en generate_response: {e}", exc_info=True)
         return {"text": "Lo siento, ocurrió un error generando la respuesta.", "conversation_state": "error"}
+
+async def gemini_simple_prompt(prompt: str) -> str:
+    """
+    Envía un prompt simple a Gemini y retorna solo el texto.
+    Útil para extracción de intención, fechas, etc.
+    """
+    try:
+        response_text = await get_api_response([{"role": "user", "parts": [{"text": prompt}]}])
+        return response_text
+    except Exception as e:
+        logger.error(f"Error en gemini_simple_prompt: {e}", exc_info=True)
+        return "unknown"
