@@ -3,12 +3,13 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Asegurarse de que DATABASE_URL esté definida en tus variables de entorno Docker o .env
+# Asegúrate de definir DATABASE_URL en tus variables de entorno Docker o .env
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL no está configurada en las variables de entorno.")
 
@@ -22,11 +23,29 @@ SessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=F
 async def get_db_session():
     async with SessionLocal() as session:
         try:
-            logger.info(f"DEBUG DB: Sesión CREADA (ID: {id(session)})") # <-- AÑADIR
+            logger.info(f"DEBUG DB: Sesión CREADA (ID: {id(session)})")
             yield session
-        except:
+        except Exception as e:
             await session.rollback()
+            logger.error(f"DB session rollback debido a error: {e}", exc_info=True)
             raise
         finally:
-            logger.info(f"DEBUG DB: Sesión CERRADA (ID: {id(session)})") # <-- AÑADIR
+            logger.info(f"DEBUG DB: Sesión CERRADA (ID: {id(session)})")
             await session.close()
+
+async def get_messages_by_session_id(session_id: str):
+    """
+    Recupera todos los mensajes asociados a una sesión específica ordenados cronológicamente.
+    Usa los campos correctos según el esquema real: direction y body.
+    """
+    async with get_db_session() as session:
+        query = text("""
+            SELECT direction, body
+            FROM messages
+            WHERE chat_session_id = :session_id
+            ORDER BY timestamp ASC
+        """)
+        result = await session.execute(query, {"session_id": session_id})
+        rows = result.fetchall()
+        # direction: 'in' (usuario) o 'out' (bot)
+        return [{"direction": row.direction, "body": row.body} for row in rows]
