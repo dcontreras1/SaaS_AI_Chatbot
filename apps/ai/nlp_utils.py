@@ -63,11 +63,16 @@ async def extract_info(message_text, session_data=None, user_phone=None):
 
     text = message_text.lower().strip()
 
-    # Extraer nombre (opcional)
-    name_match = re.search(r"(me llamo|soy|mi nombre es)\s+([a-záéíóúüñ\s]+)", text)
-    if name_match:
-        name_parts = name_match.group(2).split()
-        result["name"] = " ".join([part.capitalize() for part in name_parts if part])
+    # Extraer nombre usando Gemini
+    gemini_name_prompt = (
+        f"Extrae únicamente el nombre completo del usuario, si es que lo menciona, del siguiente mensaje en español. "
+        f"No incluyas frases adicionales, solo el nombre. Si el mensaje no contiene nombre, responde únicamente con 'NO'.\n"
+        f"Mensaje: '{message_text}'"
+    )
+    gemini_name = (await gemini_simple_prompt(gemini_name_prompt)).strip().replace('"', '').replace("'", "")
+    if gemini_name.upper() != "NO":
+        # Capitaliza cada parte del nombre
+        result["name"] = " ".join([part.capitalize() for part in gemini_name.split()])
 
     # El número de teléfono siempre proviene del canal/session/contexto
     if user_phone:
