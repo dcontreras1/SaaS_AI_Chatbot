@@ -15,8 +15,8 @@ class Company(Base):
     whatsapp_token = Column(String, nullable=False)
     api_key = Column(String, nullable=False, unique=True)
     calendar_email = Column(String, nullable=True, unique=True)
-    metadata = Column(JSONB, default=dict)
-
+    company_metadata = Column(JSONB, nullable=False)
+    
     appointments = relationship("Appointment", back_populates="company", cascade="all, delete")
     messages = relationship("Message", back_populates="company")
     chat_sessions = relationship("ChatSession", back_populates="company")
