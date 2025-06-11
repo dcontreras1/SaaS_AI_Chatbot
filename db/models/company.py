@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from db.database import Base
 
@@ -14,6 +15,7 @@ class Company(Base):
     whatsapp_token = Column(String, nullable=False)
     api_key = Column(String, nullable=False, unique=True)
     calendar_email = Column(String, nullable=True, unique=True)
+    metadata = Column(JSONB, default=dict)
 
     appointments = relationship("Appointment", back_populates="company", cascade="all, delete")
     messages = relationship("Message", back_populates="company")
