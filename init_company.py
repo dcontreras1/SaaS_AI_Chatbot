@@ -2,53 +2,82 @@ import asyncio
 from dotenv import load_dotenv
 import os
 
-# Especifica la ruta completa al archivo .env
-# Esto asegura que dotenv lo encuentre, sin importar desde dónde ejecutes el script.
 dotenv_path = '/home/dcontreras/SaaS_Chatbot_project/.env'
 load_dotenv(dotenv_path)
 
 from sqlalchemy.future import select
 from db.database import get_db_session
 from db.models.company import Company
-from db.models.appointment import Appointment # Asegúrate de que esta importación sea necesaria o si la eliminaste
 
 async def create_test_company():
     async with get_db_session() as session:
-        # Obtener el número de teléfono de la variable de entorno
         twilio_phone_number_raw = os.getenv("TWILIO_PHONE_NUMBER")
         if not twilio_phone_number_raw:
             print("Error: TWILIO_PHONE_NUMBER no está configurado en las variables de entorno.")
             return
 
-        # --- CAMBIO CLAVE AQUÍ: Limpiar el prefijo "whatsapp:" ---
-        # Asegurarse de que el número se guarde en la DB sin el prefijo
         cleaned_company_number = twilio_phone_number_raw.replace("whatsapp:", "")
-        # --------------------------------------------------------
 
-        # Verifica si ya existe una compañía con este número limpio
         result = await session.execute(
             select(Company).where(Company.company_number == cleaned_company_number)
         )
         existing = result.scalars().first()
 
+        # Metadata con doctores ficticios como información clave
+        metadata = {
+            "appointment_slots": [
+                {
+                    "key": "doctor",
+                    "label": "doctor",
+                    "type": "string",
+                    "required": True,
+                    "options": ["María Martinez", "Eduardo López"]
+                },
+                {
+                    "key": "datetime",
+                    "label": "fecha y hora",
+                    "type": "datetime",
+                    "required": True
+                }
+            ],
+            "confirmation_message": "Perfecto, tu cita fue agendada para {datetime} con {doctor}.",
+            # Información clave adicional (doctores de la clínica)
+            "doctors": [
+                {
+                    "name": "María Martinez",
+                    "specialty": "Ortodoncia"
+                },
+                {
+                    "name": "Eduardo López",
+                    "specialty": "Odontología general"
+                }
+            ]
+        }
+
         if existing:
             print(f"La empresa con número '{cleaned_company_number}' ya está registrada.")
-            # Opcional: Actualizar el email si ya existe y es diferente
+            modified = False
             if existing.calendar_email != "contrerasdaniel2984@gmail.com":
                 existing.calendar_email = "contrerasdaniel2984@gmail.com"
+                modified = True
+            if existing.metadata != metadata:
+                existing.metadata = metadata
+                modified = True
+            if modified:
                 await session.commit()
-                print("Email de calendario actualizado para la empresa existente.")
+                print("Datos de la empresa actualizados (email/metadata).")
             return
 
         new_company = Company(
-            name="Empresa de Prueba",
-            industry="Servicios",
+            name="Clínica Odontológica Sonríe",
+            industry="Salud",
             catalog_url=None,
-            schedule="Lunes a Viernes, 9am a 6pm",
-            company_number=cleaned_company_number, # Usar el número limpio
+            schedule="Lunes a Viernes, 8am a 8pm",
+            company_number=cleaned_company_number,
             whatsapp_token=os.getenv("TWILIO_AUTH_TOKEN"),
             api_key="test-api-key-123",
-            calendar_email="contrerasdaniel2984@gmail.com"
+            calendar_email="contrerasdaniel2984@gmail.com",
+            metadata=metadata
         )
 
         session.add(new_company)
