@@ -24,8 +24,6 @@ from apps.whatsapp.twilio_webhook_handler import webhook_router
 # === Importar el servicio de purga de tareas ===
 from tasks import start_purging_service
 
-# --- NUEVO: Manejador de eventos de Lifespan ---
-# Define tu función de lifespan como un context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -46,16 +44,15 @@ async def lifespan(app: FastAPI):
     logger.info("La aplicación se está apagando (via lifespan)...")
     print("La aplicación se está apagando (via lifespan)...")
     # El código después de 'yield' se ejecuta al apagar el servidor.
-    # Aquí puedes cerrar conexiones, liberar recursos, etc.
     # Nota: No se pueden cancelar directamente las tareas creadas con asyncio.create_task() desde aquí.
-    # Para detener tareas en segundo plano, se recomienda usar señales o guardar referencias a las tareas.
+    # Para detener tareas en segundo plano, se deberían usar señales o guardar referencias a las tareas.
     # En el caso de la purga, se detendrá automáticamente al cerrar el servidor.
 
 
 
 # === Inicializar la app de FastAPI ===
 # Importante: Pasa el manejador de lifespan al constructor de FastAPI
-app = FastAPI(title="WhatsApp IA SaaS", version="1.0.0", lifespan=lifespan) # Cambio aquí
+app = FastAPI(title="WhatsApp IA SaaS", version="1.0.0", lifespan=lifespan)
 
 # === Configurar CORS ===
 app.add_middleware(
