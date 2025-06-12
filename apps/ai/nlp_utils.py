@@ -38,7 +38,7 @@ async def detect_intent(message_text, session_data=None):
     if "información" in text:
         return "ask_information"
 
-    # Si ninguna de las intenciones anteriores coincide, usar Gemini
+    # Fallback a Gemini si no hay match rápido
     gemini_prompt = (
         f"Dada la conversación y el siguiente mensaje: '{message_text}', "
         f"¿cuál es la intención principal del usuario? Elige entre 'greet', 'farewell', "
@@ -58,12 +58,35 @@ async def detect_intent(message_text, session_data=None):
         return intent_from_gemini
     return "unknown"
 
-async def extract_info(message_text, session_data=None, user_phone=None):
+async def extract_info(message_text, session_data=None, user_phone=None, slot=None, options=None):
+    """
+    Extrae información relevante de un mensaje. Si se proveen slot y options,
+    usa Gemini para deducir el valor adecuado aunque tenga errores ortográficos, etc.
+    Si no, intenta extraer nombre y fecha/hora como antes.
+    """
     result = {}
 
     text = message_text.lower().strip()
 
-    # Extraer nombre usando Gemini
+    # EXTRACCIÓN DE OPCIONES DE SLOT (DOCTOR, SERVICIO, ETC)
+    if slot and options:
+        prompt = (
+            f"Eres un asistente virtual para agendar citas por WhatsApp.\n"
+            f"El usuario ha enviado el siguiente mensaje: \"{message_text}\"\n"
+            f"Debes extraer el valor para el campo \"{slot}\".\n"
+            f"Opciones válidas para este campo: {options}\n"
+            f"- Si el usuario menciona una de las opciones (aunque tenga errores ortográficos, palabras extra, o escriba de manera poco formal), devuélvela exactamente como aparece en la lista de opciones.\n"
+            f"- Si el usuario no menciona una opción válida, responde con None.\n"
+            f"- Si hay varias opciones mencionadas, escoge la que más se parezca a lo que el usuario escribió.\n"
+            f"Solo responde con el valor exacto de la opción, o None."
+        )
+        gemini_resp = await gemini_simple_prompt(prompt)
+        value = gemini_resp.strip().replace('"', '').replace("'", "")
+        if value.lower() == "none":
+            return {slot: None}
+        return {slot: value}
+
+    # EXTRACCIÓN DE NOMBRE (si aplica)
     gemini_name_prompt = (
         f"Extrae únicamente el nombre completo del usuario, si es que lo menciona, del siguiente mensaje en español. "
         f"No incluyas frases adicionales, solo el nombre. Si el mensaje no contiene nombre, responde únicamente con 'NO'.\n"
@@ -71,14 +94,12 @@ async def extract_info(message_text, session_data=None, user_phone=None):
     )
     gemini_name = (await gemini_simple_prompt(gemini_name_prompt)).strip().replace('"', '').replace("'", "")
     if gemini_name.upper() != "NO":
-        # Capitaliza cada parte del nombre
         result["name"] = " ".join([part.capitalize() for part in gemini_name.split()])
 
-    # El número de teléfono siempre proviene del canal/session/contexto
     if user_phone:
         result["phone"] = user_phone
 
-    # Extraer fecha y hora usando dateparser
+    # EXTRACCIÓN DE FECHA Y HORA
     cleaned_text_for_dateparser = clean_for_dateparser(text)
     parsed_dt = dateparser.parse(
         cleaned_text_for_dateparser,
