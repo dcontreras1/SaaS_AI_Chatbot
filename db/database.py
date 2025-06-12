@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Asegúrate de definir DATABASE_URL en tus variables de entorno Docker o .env
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL no está configurada en las variables de entorno.")
 
@@ -47,5 +46,4 @@ async def get_messages_by_session_id(session_id: str):
         """)
         result = await session.execute(query, {"session_id": session_id})
         rows = result.fetchall()
-        # direction: 'in' (usuario) o 'out' (bot)
         return [{"direction": row.direction, "body": row.body} for row in rows]

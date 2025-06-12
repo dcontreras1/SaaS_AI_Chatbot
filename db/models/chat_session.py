@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 from typing import List, Dict, Any
-from sqlalchemy.dialects.postgresql import JSONB # <-- Asegúrate de que sea JSONB
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.database import Base # Asumiendo que esta es la ruta correcta a tu Base
+from db.database import Base
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
@@ -14,7 +14,7 @@ class ChatSession(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_phone_number = Column(String, nullable=False, index=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
-    session_data = Column(JSONB, nullable=False, default={}) # <-- Este es el cambio clave aquí
+    session_data = Column(JSONB, nullable=False, default={})
     status = Column(String, nullable=False, default="active")
     started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_activity = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
@@ -26,7 +26,7 @@ class ChatSession(Base):
         """
         Recupera y formatea el historial de mensajes de esta sesión para el modelo LLM.
         """
-        from .messages import Message # Importación local para evitar dependencias circulares
+        from .messages import Message
 
         result = await db_session.execute(
             select(Message)
