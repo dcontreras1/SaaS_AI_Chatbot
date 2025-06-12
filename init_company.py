@@ -9,7 +9,7 @@ from sqlalchemy.future import select
 from db.database import get_db_session
 from db.models.company import Company
 
-# === Aquí defines tus empresas a registrar (puedes agregar/quitar) ===
+# Aquí se definen las empresas a registrar (se puede agregar/quitar)
 EMPRESAS = [
     {
         "name": "Clínica Odontológica Sonríe",
@@ -54,8 +54,8 @@ EMPRESAS = [
         "industry": "Belleza",
         "catalog_url": None,
         "schedule": "Martes a Sábado, 10am a 7pm",
-        "company_number_env": "PELUQUERIA_PHONE_NUMBER",  # Debes agregar esta variable en tu .env
-        "whatsapp_token_env": "PELUQUERIA_AUTH_TOKEN",    # Y esta también
+        "company_number_env": "PELUQUERIA_PHONE_NUMBER",
+        "whatsapp_token_env": "PELUQUERIA_AUTH_TOKEN",
         "api_key": "glamour-api-key-2025",
         "calendar_email": "reservas@peluqueriaglamour.com",
         "company_metadata": {
