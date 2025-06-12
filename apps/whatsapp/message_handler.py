@@ -22,12 +22,22 @@ def _generate_twilio_response(message: str) -> str:
     return str(response)
 
 def normalize_text(text):
-    """
-    Normaliza un texto para comparación: minúsculas, sin tildes y sin espacios extremos.
-    """
     if not text:
         return ""
     return unicodedata.normalize('NFD', text.strip().lower()).encode('ascii', 'ignore').decode('utf-8')
+
+def make_json_serializable(obj):
+    """
+    Recursively convert datetime objects to isoformat strings in dicts/lists.
+    """
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(i) for i in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    else:
+        return obj
 
 async def handle_incoming_message(
     user_phone_number: str,
@@ -37,7 +47,7 @@ async def handle_incoming_message(
 ) -> str:
     async with get_db_session() as db_session:
         try:
-            # --- Obtener empresa y metadata ---
+            # Obtener empresa y metadata
             cleaned_number = company_whatsapp_number.replace('whatsapp:', '')
             company_obj = await get_company_by_number(cleaned_number, db_session)
             if not company_obj:
@@ -52,7 +62,7 @@ async def handle_incoming_message(
             chat_session = await get_or_create_session(user_phone_number, company_obj.id, db_session)
             session_data = chat_session.session_data
 
-            # --- Interrupción del flujo de cita con saludo ---
+            # Interrupción del flujo de cita con saludo
             saludo_detectado = any(
                 word in message_text.lower() for word in [
                     "hola", "buenos días", "buenas tardes", "buenas noches", "saludo", "hey"
@@ -61,6 +71,7 @@ async def handle_incoming_message(
             if session_data.get("in_appointment_flow", False) and saludo_detectado:
                 session_data["in_appointment_flow"] = False
                 session_data["slots_filled"] = {}
+                session_data = make_json_serializable(session_data)
                 await update_session_data(chat_session, session_data, db_session)
                 msg = f"¡Hola! Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
                 await message_repository.add_message(
@@ -70,7 +81,7 @@ async def handle_incoming_message(
                 await db_session.commit()
                 return _generate_twilio_response(msg)
 
-            # --- Flujo de cita usando Gemini para extraer opciones y fechas ---
+            # Flujo de cita usando Gemini para extraer opciones y fechas
             if session_data.get("in_appointment_flow", False):
                 slots_filled = session_data.get("slots_filled", {})
                 # Busca el siguiente slot pendiente
@@ -92,7 +103,6 @@ async def handle_incoming_message(
                             options=next_slot["options"],
                         )
                         gemini_value = info.get(next_slot["key"])
-                        # Comparación robusta: acepta variantes de tildes y mayúsculas
                         matched_option = None
                         if gemini_value:
                             normalized_gemini = normalize_text(gemini_value)
@@ -100,7 +110,6 @@ async def handle_incoming_message(
                                 if normalize_text(opt) == normalized_gemini:
                                     matched_option = opt
                                     break
-                            # Permitir también substring si no hay match exacto
                             if not matched_option:
                                 for opt in next_slot["options"]:
                                     if normalized_gemini in normalize_text(opt):
@@ -127,6 +136,7 @@ async def handle_incoming_message(
                     if value:
                         slots_filled[next_slot["key"]] = value
                         session_data["slots_filled"] = slots_filled
+                        session_data = make_json_serializable(session_data)
                         await update_session_data(chat_session, session_data, db_session)
                         # Busca el siguiente slot después de llenar este
                         for slot2 in appointment_slots:
@@ -146,6 +156,7 @@ async def handle_incoming_message(
                                 return _generate_twilio_response(msg)
                         # Si ya no hay slots pendientes, confirma y agenda la cita
                         session_data["in_appointment_flow"] = False
+                        session_data = make_json_serializable(session_data)
                         await update_session_data(chat_session, session_data, db_session)
                         msg = confirmation_message.format(**slots_filled)
                         try:
@@ -183,7 +194,6 @@ async def handle_incoming_message(
                         await db_session.commit()
                         return _generate_twilio_response(msg)
                     else:
-                        # Si hay opciones, muéstralas
                         if "options" in next_slot:
                             options_str = ", ".join(next_slot["options"])
                             msg = f"Por favor indícame {next_slot['label']}. Opciones: {options_str}."
@@ -196,9 +206,9 @@ async def handle_incoming_message(
                         await db_session.commit()
                         return _generate_twilio_response(msg)
                 else:
-                    # Todos los slots llenos, confirma cita
                     msg = confirmation_message.format(**slots_filled)
                     session_data["in_appointment_flow"] = False
+                    session_data = make_json_serializable(session_data)
                     await update_session_data(chat_session, session_data, db_session)
                     await message_repository.add_message(
                         db_session, str(uuid.uuid4()), msg, "out",
@@ -207,7 +217,7 @@ async def handle_incoming_message(
                     await db_session.commit()
                     return _generate_twilio_response(msg)
 
-            # --- Saludo fuera de cualquier flujo activo ---
+            # Saludo fuera de cualquier flujo activo
             saludos = {
                 "hola": "¡Hola!",
                 "buenos días": "¡Buenos días!",
@@ -226,11 +236,12 @@ async def handle_incoming_message(
                     await db_session.commit()
                     return _generate_twilio_response(msg)
 
-            # --- Inicio del flujo de agendamiento si detecta intención ---
+            # Inicio del flujo de agendamiento si detecta intención
             intent = await detect_intent(message_text, session_data)
             if intent in ["schedule_appointment", "agendar_cita", "cita"]:
                 session_data["in_appointment_flow"] = True
                 session_data["slots_filled"] = {}
+                session_data = make_json_serializable(session_data)
                 await update_session_data(chat_session, session_data, db_session)
                 first_slot = appointment_slots[0] if appointment_slots else None
                 if first_slot:
@@ -251,7 +262,7 @@ async def handle_incoming_message(
                         "No hay configuración de slots para agendar citas en esta empresa."
                     )
 
-            # --- Manejo de otros intents, como horario ---
+            # Manejo de otros intents, como horario
             if "horario" in message_text.lower():
                 horario = company_obj.schedule or "No tengo registrado el horario en este momento."
                 msg = f"Nuestro horario de atención es: {horario}"
@@ -262,7 +273,7 @@ async def handle_incoming_message(
                 await db_session.commit()
                 return _generate_twilio_response(msg)
 
-            # --- Fallback: Respuesta general ---
+            # Fallback: Respuesta general
             msg = f"Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
             await message_repository.add_message(
                 db_session, str(uuid.uuid4()), msg, "out",

@@ -29,16 +29,14 @@ def get_calendar_service():
         return service
     except Exception as e:
         logger.error(f"Error al autenticar con Google Calendar: {e}")
-        raise # Vuelve a levantar la excepción para que el llamador la maneje
+        raise
 
 async def create_calendar_event(
     summary: str, 
     description: str, 
     start_datetime: datetime, 
     end_datetime: datetime,
-    # --- NUEVO PARÁMETRO: calendar_email ---
     company_calendar_email: str 
-    # --------------------------------------
 ) -> str:
     """
     Crea un evento en el calendario de Google utilizando la cuenta de servicio,
@@ -63,19 +61,15 @@ async def create_calendar_event(
         return "Error: No se pudo conectar con el servicio de calendario."
 
     # Asegurarse de que los datetimes sean conscientes de la zona horaria
-    # Para la API de Google, es mejor UTC o una zona horaria IANA válida.
+    # Para la API de Google, es mejor UTC
     if start_datetime.tzinfo is None:
-        # Asumiendo que los datetimes se generan en UTC o necesitas una zona específica como Cali
-        # Para Cali (Colombia) es America/Bogota (-05:00)
         bogota_tz = pytz_timezone('America/Bogota')
         start_datetime = bogota_tz.localize(start_datetime)
         end_datetime = bogota_tz.localize(end_datetime)
         logger.info(f"DEBUG: Datetimes convertidos a {bogota_tz}: {start_datetime}, {end_datetime}")
 
     try:
-        # --- CAMBIO CLAVE: Usar company_calendar_email como calendar_id ---
         calendar_id = company_calendar_email 
-        # ------------------------------------------------------------------
 
         # 1. Verificar la disponibilidad
         time_min = start_datetime.isoformat()
@@ -87,15 +81,15 @@ async def create_calendar_event(
             calendarId=calendar_id,
             timeMin=time_min,
             timeMax=time_max,
-            maxResults=1,    # Solo necesitamos saber si hay al menos un evento que se sobreponga
-            singleEvents=True, # Expande eventos recurrentes
+            maxResults=1,
+            singleEvents=True,
             orderBy='startTime'
         ).execute()
         events = events_result.get('items', [])
 
         if events:
             logger.warning(f"Conflicto de horario detectado. Evento existente: {events[0].get('summary')} de {events[0]['start'].get('dateTime')} a {events[0]['end'].get('dateTime')}")
-            return "Lo siento, hay un conflicto de horario con otra cita. Por favor, elige otra hora o día." # Informar al usuario del conflicto
+            return "Lo siento, hay un conflicto de horario con otra cita. Por favor, elige otra hora o día."
 
         # 2. Si no hay conflictos, crear el evento
         event = {
@@ -103,13 +97,13 @@ async def create_calendar_event(
             'description': description,
             'start': {
                 'dateTime': start_datetime.isoformat(),
-                'timeZone': str(start_datetime.tzinfo), # Usar la zona horaria del objeto datetime
+                'timeZone': str(start_datetime.tzinfo),
             },
             'end': {
                 'dateTime': end_datetime.isoformat(),
                 'timeZone': str(end_datetime.tzinfo),
             },
-            # Añadir asistentes o recordatorios si lo deseas
+            # Posibilidad de agregar asistentes o recordatorios si lo deseas
             # 'attendees': [{'email': 'attendee@example.com'}],
             # 'reminders': {
             #     'useDefault': False,
@@ -125,7 +119,6 @@ async def create_calendar_event(
         return event.get('htmlLink')
     except HttpError as error:
         logger.error(f"Error HTTP al crear evento o verificar disponibilidad: {error}")
-        # Puedes añadir más detalle al error si necesitas, por ejemplo, error.resp.status
         return f"Error al interactuar con el calendario: {error.content.decode()}"
     except Exception as e:
         logger.error(f"Error inesperado al crear evento o verificar disponibilidad: {e}")
