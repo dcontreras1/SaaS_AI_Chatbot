@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any
 from datetime import datetime, timedelta
 import uuid
+import unicodedata
 
 from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy.exc import SQLAlchemyError
@@ -19,6 +20,14 @@ def _generate_twilio_response(message: str) -> str:
     response = MessagingResponse()
     response.message(message)
     return str(response)
+
+def normalize_text(text):
+    """
+    Normaliza un texto para comparación: minúsculas, sin tildes y sin espacios extremos.
+    """
+    if not text:
+        return ""
+    return unicodedata.normalize('NFD', text.strip().lower()).encode('ascii', 'ignore').decode('utf-8')
 
 async def handle_incoming_message(
     user_phone_number: str,
@@ -82,7 +91,22 @@ async def handle_incoming_message(
                             slot=next_slot["key"],
                             options=next_slot["options"],
                         )
-                        value = info.get(next_slot["key"])
+                        gemini_value = info.get(next_slot["key"])
+                        # Comparación robusta: acepta variantes de tildes y mayúsculas
+                        matched_option = None
+                        if gemini_value:
+                            normalized_gemini = normalize_text(gemini_value)
+                            for opt in next_slot["options"]:
+                                if normalize_text(opt) == normalized_gemini:
+                                    matched_option = opt
+                                    break
+                            # Permitir también substring si no hay match exacto
+                            if not matched_option:
+                                for opt in next_slot["options"]:
+                                    if normalized_gemini in normalize_text(opt):
+                                        matched_option = opt
+                                        break
+                        value = matched_option
                     elif next_slot["key"] in ["datetime", "fecha", "hora", "fecha_hora", "date", "time"]:
                         info = await extract_info(
                             message_text,
@@ -91,7 +115,7 @@ async def handle_incoming_message(
                             slot=next_slot["key"],
                             options=None
                         )
-                        value = info.get(next_slot["key"])
+                        value = info.get("datetime") or info.get(next_slot["key"])
                     else:
                         info = await extract_info(
                             message_text,
