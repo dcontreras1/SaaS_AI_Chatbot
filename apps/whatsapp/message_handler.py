@@ -14,6 +14,7 @@ from apps.ai.nlp_utils import detect_intent, extract_info
 from db.database import get_db_session
 from db.models.companies import get_company_by_number
 from apps.calendar.calendar_integration import create_calendar_event
+from apps.whatsapp.utils import match_option
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def handle_incoming_message(
             company_obj = await get_company_by_number(cleaned_number, db_session)
             if not company_obj:
                 return _generate_twilio_response("No se pudo identificar la empresa. Por favor, contacta al administrador.")
-            company_metadata = company_obj.metadata or {}
+            company_metadata = company_obj.company_metadata or {}
             appointment_slots = company_metadata.get("appointment_slots", [])
             confirmation_message = company_metadata.get("confirmation_message", "Tu cita fue agendada.")
 
@@ -57,9 +58,15 @@ async def handle_incoming_message(
                     # Intenta extraer info del mensaje actual para este slot
                     info = await extract_info(message_text, session_data, user_phone=user_phone_number)
                     value = info.get(next_slot["key"])
-                    # Validación de opciones si existen
-                    if value and "options" in next_slot and value not in next_slot["options"]:
-                        value = None
+
+                    # --- Validación FLEXIBLE de opciones si existen ---
+                    if value and "options" in next_slot:
+                        value_match = match_option(value, next_slot["options"])
+                        if value_match:
+                            value = value_match
+                        else:
+                            value = None
+
                     if value:
                         slots_filled[next_slot["key"]] = value
                         session_data["slots_filled"] = slots_filled
