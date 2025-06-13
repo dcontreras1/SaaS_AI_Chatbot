@@ -119,8 +119,8 @@ El bot está diseñado para manejar los siguientes flujos de conversación:
 - Bot: "Necesito la fecha y hora específicas para programar tu cita. ¿Podrías proporcionármelas?"
 - Usuario: "El viernes 30 de mayo a las 3 de la tarde."
 - Bot: "¡Perfecto! Ya tengo la fecha y hora: 30/05/2025 a las 15:00. Ahora necesito tu nombre y un número de teléfono de contacto para poder agendar tu cita."
-- Usuario: "Mi nombre es Daniel Contreras y mi teléfono es 3123456789."
-- Bot: "¡Perfecto! Tu cita ha sido programada para el 30/05/2025 a las 15:00. Te esperamos, Daniel Contreras."
+- Usuario: "Mi nombre es Manuel Rodríguez y mi teléfono es 3123456789."
+- Bot: "¡Perfecto! Tu cita ha sido programada para el 30/05/2025 a las 15:00. Te esperamos, Manuel Rodríguez."
 - (El bot creará un evento en Google Calendar con los detalles proporcionados.)
 3. Provisión de Contacto:
 - Usuario: "Mi nombre es Juan Pérez y mi número es 3001234567."
