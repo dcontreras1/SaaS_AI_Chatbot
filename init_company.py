@@ -30,13 +30,19 @@ EMPRESAS = [
                     "options": ["María Martinez", "Eduardo López"]
                 },
                 {
+                    "key": "name",
+                    "label": "nombre",
+                    "type": "string",
+                    "required": True
+                },
+                {
                     "key": "datetime",
                     "label": "fecha y hora",
                     "type": "datetime",
                     "required": True
                 }
             ],
-            "confirmation_message": "Perfecto, tu cita fue agendada para {datetime} con {doctor}.",
+            "confirmation_message": "Perfecto, {name}, tu cita con {doctor} fue agendada para el {datetime}.",
             "doctors": [
                 {
                     "name": "María Martinez",
@@ -68,13 +74,19 @@ EMPRESAS = [
                     "options": ["Ana Rivera", "Carlos Pérez"]
                 },
                 {
+                    "key": "name",
+                    "label": "nombre",
+                    "type": "string",
+                    "required": True
+                },
+                {
                     "key": "datetime",
                     "label": "fecha y hora",
                     "type": "datetime",
                     "required": True
                 }
             ],
-            "confirmation_message": "¡Listo! Tu cita con {stylist} es el {datetime}.",
+            "confirmation_message": "¡Listo! Tu cita con {stylist} para {name} es el {datetime}.",
             "stylists": [
                 {
                     "name": "Ana Rivera",
