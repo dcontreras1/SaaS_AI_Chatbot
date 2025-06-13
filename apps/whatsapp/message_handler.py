@@ -56,16 +56,26 @@ async def handle_incoming_message(
                 )
             company_metadata = company_obj.company_metadata or {}
             appointment_slots = company_metadata.get("appointment_slots", [])
-            confirmation_message = company_metadata.get("confirmation_message", "Tu cita fue agendada.")
+            confirmation_message = company_metadata.get(
+                "confirmation_message", "Tu cita fue agendada."
+            )
             company_name = company_obj.name or "la empresa"
 
-            chat_session = await get_or_create_session(user_phone_number, company_obj.id, db_session)
+            chat_session = await get_or_create_session(
+                user_phone_number, company_obj.id, db_session
+            )
             session_data = chat_session.session_data
 
             # Interrupción del flujo de cita con saludo
             saludo_detectado = any(
-                word in message_text.lower() for word in [
-                    "hola", "buenos días", "buenas tardes", "buenas noches", "saludo", "hey"
+                word in message_text.lower()
+                for word in [
+                    "hola",
+                    "buenos días",
+                    "buenas tardes",
+                    "buenas noches",
+                    "saludo",
+                    "hey",
                 ]
             )
             if session_data.get("in_appointment_flow", False) and saludo_detectado:
@@ -73,10 +83,17 @@ async def handle_incoming_message(
                 session_data["slots_filled"] = {}
                 session_data = make_json_serializable(session_data)
                 await update_session_data(chat_session, session_data, db_session)
-                msg = f"¡Hola! Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
+                msg = (
+                    f"¡Hola! Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
+                )
                 await message_repository.add_message(
-                    db_session, str(uuid.uuid4()), msg, "out",
-                    company_whatsapp_number, chat_session.company_id, chat_session.id
+                    db_session,
+                    str(uuid.uuid4()),
+                    msg,
+                    "out",
+                    company_whatsapp_number,
+                    chat_session.company_id,
+                    chat_session.id,
                 )
                 await db_session.commit()
                 return _generate_twilio_response(msg)
@@ -93,8 +110,31 @@ async def handle_incoming_message(
 
                 if next_slot:
                     value = None
-                    # Usar LLM para slots con opciones o para fecha/hora
-                    if "options" in next_slot:
+                    # --- NOMBRE ---
+                    if next_slot["key"] == "name":
+                        # Extraer el nombre del mensaje con Gemini
+                        info = await extract_info(
+                            message_text,
+                            session_data,
+                            user_phone=user_phone_number,
+                            slot="name",
+                        )
+                        value = info.get("name")
+                        if not value:
+                            msg = "¿Podrías indicarme el nombre de la persona para quien es la cita?"
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
+                    # --- DOCTOR (opciones) ---
+                    elif "options" in next_slot:
                         info = await extract_info(
                             message_text,
                             session_data,
@@ -116,106 +156,189 @@ async def handle_incoming_message(
                                         matched_option = opt
                                         break
                         value = matched_option
-                    elif next_slot["key"] in ["datetime", "fecha", "hora", "fecha_hora", "date", "time"]:
+                        if not value:
+                            options_str = ", ".join(next_slot["options"])
+                            msg = (
+                                f"¿Con qué doctor prefieres tu cita? Puedes elegir entre {options_str}."
+                            )
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
+                    # --- FECHA/HORA ---
+                    elif next_slot["key"] in [
+                        "datetime",
+                        "fecha",
+                        "hora",
+                        "fecha_hora",
+                        "date",
+                        "time",
+                    ]:
                         info = await extract_info(
                             message_text,
                             session_data,
                             user_phone=user_phone_number,
                             slot=next_slot["key"],
-                            options=None
+                            options=None,
                         )
                         value = info.get("datetime") or info.get(next_slot["key"])
+                        if not value:
+                            msg = f"¿Para qué fecha y hora deseas la cita?"
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
+                    # --- OTROS SLOTS ---
                     else:
                         info = await extract_info(
                             message_text,
                             session_data,
-                            user_phone=user_phone_number
+                            user_phone=user_phone_number,
                         )
                         value = info.get(next_slot["key"])
+                        if not value:
+                            msg = f"Por favor indícame {next_slot['label']}."
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
 
+                    # Si extrajo el valor, lo guarda
                     if value:
                         slots_filled[next_slot["key"]] = value
                         session_data["slots_filled"] = slots_filled
                         session_data = make_json_serializable(session_data)
                         await update_session_data(chat_session, session_data, db_session)
-                        # Busca el siguiente slot después de llenar este
-                        for slot2 in appointment_slots:
-                            if slot2["key"] not in slots_filled:
-                                if "options" in slot2:
-                                    options_str = ", ".join(slot2["options"])
-                                    msg = f"Por favor indícame {slot2['label']}. Opciones: {options_str}."
-                                elif slot2["key"] in ["datetime", "fecha", "hora", "fecha_hora", "date", "time"]:
-                                    msg = f"Por favor indícame {slot2['label']}."
-                                else:
-                                    msg = f"Por favor indícame {slot2['label']}."
-                                await message_repository.add_message(
-                                    db_session, str(uuid.uuid4()), msg, "out",
-                                    company_whatsapp_number, chat_session.company_id, chat_session.id
-                                )
-                                await db_session.commit()
-                                return _generate_twilio_response(msg)
-                        # Si ya no hay slots pendientes, confirma y agenda la cita
-                        session_data["in_appointment_flow"] = False
-                        session_data = make_json_serializable(session_data)
-                        await update_session_data(chat_session, session_data, db_session)
-                        msg = confirmation_message.format(**slots_filled)
-                        try:
-                            appointment_datetime = slots_filled.get("datetime")
-                            doctor = slots_filled.get("doctor")
-                            appointment_dt = None
+
+                        # --- NUEVO: buscar y preguntar inmediatamente el siguiente slot pendiente ---
+                        pending_slot = None
+                        for slot in appointment_slots:
+                            if slot["key"] not in slots_filled:
+                                pending_slot = slot
+                                break
+
+                        if pending_slot:
+                            # Pregunta por el siguiente slot inmediatamente
+                            if pending_slot["key"] == "name":
+                                msg = "¿Podrías indicarme el nombre de la persona para quien es la cita?"
+                            elif "options" in pending_slot:
+                                options_str = ", ".join(pending_slot["options"])
+                                msg = f"¿Con qué doctor prefieres tu cita? Puedes elegir entre {options_str}."
+                            elif pending_slot["key"] in [
+                                "datetime", "fecha", "hora", "fecha_hora", "date", "time"
+                            ]:
+                                msg = f"¿Para qué fecha y hora deseas la cita?"
+                            else:
+                                msg = f"Por favor indícame {pending_slot['label']}."
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
+                        else:
+                            # Si no quedan slots, agenda y confirma
+                            session_data["in_appointment_flow"] = False
+                            session_data = make_json_serializable(session_data)
+                            await update_session_data(chat_session, session_data, db_session)
+                            # --- Construir resumen y descripción con nombre ---
+                            name = slots_filled.get("name", "")
+                            doctor = slots_filled.get("doctor", "")
+                            appointment_datetime = slots_filled.get("datetime", "")
+                            # Formatea fecha y hora para mensaje
+                            fecha_str, hora_str = "", ""
                             if appointment_datetime:
                                 if isinstance(appointment_datetime, str):
                                     try:
-                                        appointment_dt = datetime.fromisoformat(appointment_datetime)
+                                        dt = datetime.fromisoformat(appointment_datetime)
                                     except Exception:
-                                        pass
+                                        dt = None
                                 elif isinstance(appointment_datetime, datetime):
-                                    appointment_dt = appointment_datetime
-                            summary = f"Cita {doctor or user_phone_number} - {company_name}"
-                            description = f"Cita agendada por WhatsApp para {user_phone_number}."
-                            if appointment_dt:
-                                end_datetime_obj = appointment_dt + timedelta(hours=1)
-                                calendar_event_link = await create_calendar_event(
-                                    summary,
-                                    description,
-                                    appointment_dt,
-                                    end_datetime_obj,
-                                    company_obj.calendar_email if company_obj else None
+                                    dt = appointment_datetime
+                                else:
+                                    dt = None
+                                if dt:
+                                    fecha_str = dt.strftime("%d/%m/%Y")
+                                    hora_str = dt.strftime("%H:%M")
+                            summary = (
+                                f"Cita {name} con {doctor} - {company_name}"
+                                if name
+                                else f"Cita con {doctor} - {company_name}"
+                            )
+                            description = (
+                                f"Cita odontológica para {name} con el doctor {doctor} agendada por WhatsApp para el paciente {user_phone_number}."
+                            )
+                            msg = f"Perfecto, {name}, tu cita con {doctor} fue agendada para el {fecha_str} a las {hora_str}."
+                            try:
+                                appointment_dt = None
+                                if appointment_datetime:
+                                    if isinstance(appointment_datetime, str):
+                                        try:
+                                            appointment_dt = datetime.fromisoformat(
+                                                appointment_datetime
+                                            )
+                                        except Exception:
+                                            pass
+                                    elif isinstance(appointment_datetime, datetime):
+                                        appointment_dt = appointment_datetime
+                                if appointment_dt:
+                                    end_datetime_obj = appointment_dt + timedelta(
+                                        hours=1
+                                    )
+                                    calendar_event_link = await create_calendar_event(
+                                        summary,
+                                        description,
+                                        appointment_dt,
+                                        end_datetime_obj,
+                                        company_obj.calendar_email
+                                        if company_obj
+                                        else None,
+                                    )
+                                    if "Error" in calendar_event_link:
+                                        msg += " (No se pudo crear el evento en el calendario)"
+                            except Exception as e:
+                                logger.error(
+                                    f"Error al crear evento en calendario: {e}"
                                 )
-                                if "Error" in calendar_event_link:
-                                    msg += " (No se pudo crear el evento en el calendario)"
-                        except Exception as e:
-                            logger.error(f"Error al crear evento en calendario: {e}")
 
-                        await message_repository.add_message(
-                            db_session, str(uuid.uuid4()), msg, "out",
-                            company_whatsapp_number, chat_session.company_id, chat_session.id
-                        )
-                        await db_session.commit()
-                        return _generate_twilio_response(msg)
-                    else:
-                        if "options" in next_slot:
-                            options_str = ", ".join(next_slot["options"])
-                            msg = f"Por favor indícame {next_slot['label']}. Opciones: {options_str}."
-                        else:
-                            msg = f"Por favor indícame {next_slot['label']}."
-                        await message_repository.add_message(
-                            db_session, str(uuid.uuid4()), msg, "out",
-                            company_whatsapp_number, chat_session.company_id, chat_session.id
-                        )
-                        await db_session.commit()
-                        return _generate_twilio_response(msg)
-                else:
-                    msg = confirmation_message.format(**slots_filled)
-                    session_data["in_appointment_flow"] = False
-                    session_data = make_json_serializable(session_data)
-                    await update_session_data(chat_session, session_data, db_session)
-                    await message_repository.add_message(
-                        db_session, str(uuid.uuid4()), msg, "out",
-                        company_whatsapp_number, chat_session.company_id, chat_session.id
-                    )
-                    await db_session.commit()
-                    return _generate_twilio_response(msg)
+                            await message_repository.add_message(
+                                db_session,
+                                str(uuid.uuid4()),
+                                msg,
+                                "out",
+                                company_whatsapp_number,
+                                chat_session.company_id,
+                                chat_session.id,
+                            )
+                            await db_session.commit()
+                            return _generate_twilio_response(msg)
+                # Si next_slot no existe, nada por hacer
 
             # Saludo fuera de cualquier flujo activo
             saludos = {
@@ -223,15 +346,20 @@ async def handle_incoming_message(
                 "buenos días": "¡Buenos días!",
                 "buenas tardes": "¡Buenas tardes!",
                 "buenas noches": "¡Buenas noches!",
-                "hey": "¡Hey!"
+                "hey": "¡Hey!",
             }
             mensaje_usuario = message_text.lower().strip()
             for saludo, respuesta_saludo in saludos.items():
                 if saludo in mensaje_usuario:
                     msg = f"{respuesta_saludo} Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
                     await message_repository.add_message(
-                        db_session, str(uuid.uuid4()), msg, "out",
-                        company_whatsapp_number, chat_session.company_id, chat_session.id
+                        db_session,
+                        str(uuid.uuid4()),
+                        msg,
+                        "out",
+                        company_whatsapp_number,
+                        chat_session.company_id,
+                        chat_session.id,
                     )
                     await db_session.commit()
                     return _generate_twilio_response(msg)
@@ -245,14 +373,30 @@ async def handle_incoming_message(
                 await update_session_data(chat_session, session_data, db_session)
                 first_slot = appointment_slots[0] if appointment_slots else None
                 if first_slot:
-                    if "options" in first_slot:
+                    if first_slot["key"] == "name":
+                        msg = "¿Podrías indicarme el nombre de la persona para quien es la cita?"
+                    elif "options" in first_slot:
                         options_str = ", ".join(first_slot["options"])
-                        msg = f"Para agendar tu cita necesito saber {first_slot['label']}. Opciones: {options_str}."
+                        msg = f"¿Con qué doctor prefieres tu cita? Puedes elegir entre {options_str}."
+                    elif first_slot["key"] in [
+                        "datetime",
+                        "fecha",
+                        "hora",
+                        "fecha_hora",
+                        "date",
+                        "time",
+                    ]:
+                        msg = f"¿Para qué fecha y hora deseas la cita?"
                     else:
                         msg = f"Para agendar tu cita necesito saber {first_slot['label']}."
                     await message_repository.add_message(
-                        db_session, str(uuid.uuid4()), msg, "out",
-                        company_whatsapp_number, chat_session.company_id, chat_session.id
+                        db_session,
+                        str(uuid.uuid4()),
+                        msg,
+                        "out",
+                        company_whatsapp_number,
+                        chat_session.company_id,
+                        chat_session.id,
                     )
                     await db_session.commit()
                     return _generate_twilio_response(msg)
@@ -264,11 +408,19 @@ async def handle_incoming_message(
 
             # Manejo de otros intents, como horario
             if "horario" in message_text.lower():
-                horario = company_obj.schedule or "No tengo registrado el horario en este momento."
+                horario = (
+                    company_obj.schedule
+                    or "No tengo registrado el horario en este momento."
+                )
                 msg = f"Nuestro horario de atención es: {horario}"
                 await message_repository.add_message(
-                    db_session, str(uuid.uuid4()), msg, "out",
-                    company_whatsapp_number, chat_session.company_id, chat_session.id
+                    db_session,
+                    str(uuid.uuid4()),
+                    msg,
+                    "out",
+                    company_whatsapp_number,
+                    chat_session.company_id,
+                    chat_session.id,
                 )
                 await db_session.commit()
                 return _generate_twilio_response(msg)
@@ -276,8 +428,13 @@ async def handle_incoming_message(
             # Fallback: Respuesta general
             msg = f"Soy el asistente virtual para {company_name}. ¿En qué puedo ayudarte?"
             await message_repository.add_message(
-                db_session, str(uuid.uuid4()), msg, "out",
-                company_whatsapp_number, chat_session.company_id, chat_session.id
+                db_session,
+                str(uuid.uuid4()),
+                msg,
+                "out",
+                company_whatsapp_number,
+                chat_session.company_id,
+                chat_session.id,
             )
             await db_session.commit()
             return _generate_twilio_response(msg)
